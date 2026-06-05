@@ -20,83 +20,100 @@ export function activate(context: vscode.ExtensionContext) {
          * 作用：它是“紧急刹车”。如果用户鼠标移得太快，VS Code 觉得刚才那个请求没必要了，就会通过这个 token 通知你：“别算了，停下！”（防止插件卡顿）。
          */
         provideHover(document, position, token) {
-            // 1. 获取当前鼠标所在的单词范围
-            const wordRange = document.getWordRangeAtPosition(position);
-            if (!wordRange) { return; }
-
-            // 2. 获取这个单词的文本
-            const wordText = document.getText(wordRange);
-
-            // 3. 【关键一步】预判：检查单词后面是不是 "("
-            // 我们构建一个范围：从单词结束位置开始，往后取 1 个字符
-            const nextCharPos = new vscode.Position(
-                wordRange.end.line,
-                // line 行号不变，character 字符位置往后移 1
-                wordRange.end.character
-            );
-            const nextCharRange = new vscode.Range(nextCharPos, nextCharPos.translate(0, 1));
-            const nextChar = document.getText(nextCharRange);
-            //console.log(`当前项: ${nextCharRange}, 预判结果: ${nextChar === '(' ? '可能是 Mixin' : '不是 Mixin'}`);
-            // 4. 判断：如果是 Mixin (后面有括号)，才继续执行
-            if (nextChar === '(') {
-                console.log(`🎯 发现 Mixin 调用: ${wordText}`);
-                // 调用刚才写的查找函数
-                // 注意：position.line 是当前行号
-                const commentContent = Startupfunction(document, wordText, position.line);
-
-                if (commentContent) {
-                    // 假设 commentText 是你刚才通过 getDocCommentAbove 拿到的纯文本字符串
-                    // 1. 创建 Markdown 内容对象
-                    const hoverContent = new vscode.MarkdownString();
-                    // 2. 开启 HTML 支持（可选，但建议开启以支持更多样式）
-                    hoverContent.supportHtml = true;
-                    // 3. 将纯文本转换为 Markdown 格式
-                    // 使用 code block (```) 包裹可以保留注释中的缩进和换行，看起来更整齐
-                    // 也可以直接使用 appendText(commentText)
-                    hoverContent.appendCodeblock(commentContent, 'less');
-                    const range = document.lineAt(position.line).range; // 让提示框出现在当前行
-                    // 4. 创建 Hover 实例
-                    // 第一个参数是内容，第二个参数是显示的矩形范围（决定鼠标放哪里才显示）
-                    const hover = new vscode.Hover(hoverContent, range);
-                    // 5. 返回结果
-                    return hover;
-                } else {
-                    return undefined;
-                }
+        // 注意：position.line 是当前行号
+            const commentContent = startupfunction(document, position, position.line);
+            if (commentContent) {
+                // 假设 commentText 是你刚才通过 getDocCommentAbove 拿到的纯文本字符串
+                // 1. 创建 Markdown 内容对象
+                const hoverContent = new vscode.MarkdownString();
+                // 2. 开启 HTML 支持（可选，但建议开启以支持更多样式）
+                hoverContent.supportHtml = true;
+                // 3. 将纯文本转换为 Markdown 格式
+                // 使用 code block (```) 包裹可以保留注释中的缩进和换行，看起来更整齐
+                // 也可以直接使用 appendText(commentText)
+                hoverContent.appendCodeblock(commentContent, 'less');
+                const range = document.lineAt(position.line).range; // 让提示框出现在当前行
+                // 4. 创建 Hover 实例
+                // 第一个参数是内容，第二个参数是显示的矩形范围（决定鼠标放哪里才显示）
+                const hover = new vscode.Hover(hoverContent, range);
+                // 5. 返回结果
+                return hover;
+            } else {
+                return undefined;
             }
-            // 如果不是 Mixin（比如只是普通的 .class），什么都不做
-            return undefined;
         }
     });
     context.subscriptions.push(disposable);
 }
-/**
- * 核心业务逻辑：根据单词查找对应的 Mixin 注释
+
+
+
+/** 核心业务逻辑：非map的函数逻辑 , 实时计算当前鼠标所在位置是否是 Mixin 调用，如果是则找到对应的定义行并提取注释内容
  * @param document 当前文档
- * @param wordText 鼠标悬停的单词
- * @param position 当前行号（用于排除自身定义的干扰）
+ * @param position 当前鼠标位置
+ * @param positionline 当前行号（用于排除自身定义的干扰）
+ * @param map 是否开启增量更新 key=MixinName value=注释内容 保存后更新到map中
+ * @returns 注释内容字符串，如果没有找到则返回 undefined
  */
-function Startupfunction (document: vscode.TextDocument, wordText: string, position: number): string | undefined {
-    const definitionLineIndex = findMixinDefinition(document, wordText, position);
-    if (definitionLineIndex !== undefined) {
-        const commentContent = getDocCommentAbove(document, definitionLineIndex);
-        if (commentContent) {
-            console.log('📝 找到注释:', commentContent);
-            return commentContent;
+function startupfunction (document: vscode.TextDocument, position: vscode.Position, positionline: number): string | undefined {
+    // 1. 获取当前鼠标所在的单词范围
+    const wordRange = document.getWordRangeAtPosition(position);
+    if (!wordRange) { return; }
+    // 2. 【关键一步】预判：检查单词后面是不是 "("
+    const nextChar = mixinProbabilityScreening(wordRange, document);
+    // 3. 判断：如果是 Mixin (后面有括号)，才继续执行
+    if (nextChar === '(') {
+        // 1. 获取这个单词的文本
+        const wordText = document.getText(wordRange);
+        console.log(`🎯 发现 Mixin 调用: ${wordText}`);
+        const definitionLineIndex = findMixinDefinition(document, wordText, positionline);
+        if (definitionLineIndex !== undefined) {
+            const commentContent = getDocCommentAbove(document, definitionLineIndex);
+            if (commentContent) {
+                console.log('📝 找到注释:', commentContent);
+                return commentContent;
+            } else {
+                console.log('⚠️ 该 Mixin 没有文档注释');
+                return undefined;
+            }
         } else {
-            console.log('⚠️ 该 Mixin 没有文档注释');
+            console.log(`❌ 未找到该 Mixin 的定义`);
             return undefined;
         }
-    } else {
-        console.log(`❌ 未找到该 Mixin 的定义`);
-        return undefined;
     }
+    // 如果不是 Mixin（比如只是普通的 .class），什么都不做
+    return undefined;  
 }
-/**
- * 辅助函数：向上查找 Mixin 的定义
+function startupfunctionmap () {
+    //占位,后续会改为GlobalSearch 
+}
+/** 全局查找 Mixin 名字的函数（未使用）, map版本的核心逻辑：扫描整个文档，找到所有可能的 Mixin 定义，并把它们的名字和注释内容存到一个 Map 里，key 是 Mixin 名字，value 是注释内容
+ * @param document 当前文档
+ */
+function globalSearch() {
+}
+/** 预判函数：检查单词后面是否紧跟 "("，以此来判断它是否可能是 Mixin 调用
+ * @param wordRange 当前单词的范围
+ * @param document 当前文档对象
+ * @returns 紧跟在单词后面的字符，如果是 "(" 则很可能是 Mixin 调用，否则不是
+ */
+function mixinProbabilityScreening(wordRange: vscode.Range, document: vscode.TextDocument) {
+    // 我们构建一个范围：从单词结束位置开始，往后取 1 个字符
+    const nextCharPos = new vscode.Position(
+        wordRange.end.line,
+        // line 行号不变，character 字符位置往后移 1
+        wordRange.end.character
+    );
+    const nextCharRange = new vscode.Range(nextCharPos, nextCharPos.translate(0, 1));
+    const nextChar = document.getText(nextCharRange);
+    console.log(`预判结果: ${nextChar === '(' ? '可能是 Mixin' : '不是 Mixin'}`);
+    return nextChar;
+}
+/** 辅助函数：向上查找 Mixin 的定义,返回所在的行号
  * @param document 当前文档对象
  * @param mixinName 需要查找的 Mixin 名字 (例如 ".border-radius")
  * @param currentLineIndex 当前鼠标所在的行号 (用于跳过自身)
+ * @return 提取所在的行号，如果没找到则返回 undefined
  */
 function findMixinDefinition(document: vscode.TextDocument, mixinName: string, currentLineIndex: number): number | undefined {
     // 1. 构建正则：转义特殊字符，并匹配紧跟的左括号 (允许中间有空格)
@@ -106,7 +123,7 @@ function findMixinDefinition(document: vscode.TextDocument, mixinName: string, c
     // .*? 表示“非贪婪匹配”，会尽快找到第一个 (
     const regex = new RegExp(`${escapedName}.*?\\(`);
     // 2. 从当前行的上一行开始，倒序遍历整个文档
-    for (let i = currentLineIndex - 1; i >= 0; i--) {
+    for (let i = currentLineIndex; i >= 0; i--) {
         const lineText = document.lineAt(i).text.trim();
         // 3. 初步匹配：看这行有没有 "名字("
         if (regex.test(lineText)) {
@@ -119,10 +136,9 @@ function findMixinDefinition(document: vscode.TextDocument, mixinName: string, c
     }
     return undefined; // 没找到
 }
-/**
- * 跨行提取 Mixin 参数的工具函数
+/** 跨行提取 Mixin 参数的工具函数,提取到的参数字符串(未使用,但后续可以用来增强提示信息，比如显示参数列表)
  * @param document 当前文档对象
- * @param startLineIndex 包含 Mixin 名称的起始行号
+ * @param startLineIndex 包含 Mixin 名称的起始行号/位置
  * @returns 提取到的参数字符串 (如 "@color, @size: 10px")，若未找到则返回空字符串
  */
 function extractMixinParams(document: vscode.TextDocument, startLineIndex: number): string {
@@ -168,8 +184,7 @@ function extractMixinParams(document: vscode.TextDocument, startLineIndex: numbe
     // 兜底：如果没有找到完整的参数对，返回空字符串或原始累积文本供后续判断
     return "";
 }
-/**
- * 获取指定行上方的文档注释 (JSDoc 风格)
+/** 获取指定行上方的文档注释 (JSDoc 风格)
  * @param document 当前文档对象
  * @param definitionLineIndex Mixin 定义所在的行号
  * @returns 提取出的纯文本注释内容，如果没有找到则返回 null
@@ -179,7 +194,7 @@ function getDocCommentAbove(document: vscode.TextDocument, definitionLineIndex: 
     for (let i = definitionLineIndex - 1; i >= 0; i--) {
         const lineText = document.lineAt(i).text.trim();
 
-        // 2. 终止条件：如果遇到空行，或者遇到了代码符号（如 '{'），说明注释区域结束了
+        // 2. 终止条件：如果遇到空行，或者遇到了代码符号（如 '}'），说明注释区域结束了
         if (lineText === '' || lineText.startsWith('}') || lineText.startsWith('.')) {
             break;
         }
