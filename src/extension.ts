@@ -60,12 +60,11 @@ function startupfunction (document: vscode.TextDocument, position: vscode.Positi
     const wordRange = document.getWordRangeAtPosition(position);
     if (!wordRange) { return; }
     // 2. 【关键一步】预判：检查单词后面是不是 "("
-    const nextChar = mixinProbabilityScreening(wordRange, document);
+    const nextChar = mixinProbabilityScreening(document,position.line);
     // 3. 判断：如果是 Mixin (后面有括号)，才继续执行
-    if (nextChar === '(') {
+    if (nextChar) {
         // 1. 获取这个单词的文本
         const wordText = document.getText(wordRange);
-        console.log(`🎯 发现 Mixin 调用: ${wordText}`);
         const definitionLineIndex = findMixinDefinition(document, wordText, positionline);
         if (definitionLineIndex !== undefined) {
             const commentContent = getDocCommentAbove(document, definitionLineIndex);
@@ -84,30 +83,52 @@ function startupfunction (document: vscode.TextDocument, position: vscode.Positi
     // 如果不是 Mixin（比如只是普通的 .class），什么都不做
     return undefined;  
 }
-function startupfunctionmap () {
+function startupfunctionmap() {
     //占位,后续会改为GlobalSearch 
 }
-/** 全局查找 Mixin 名字的函数（未使用）, map版本的核心逻辑：扫描整个文档，找到所有可能的 Mixin 定义，并把它们的名字和注释内容存到一个 Map 里，key 是 Mixin 名字，value 是注释内容
+/** 全局查找 Mixin 名字的函数（未使用）,map版本的核心逻辑：扫描整个文档，找到所有可能的 Mixin 定义，并把它们的名字和注释内容存到一个 Map 里，key 是 Mixin 名字，value 是注释内容
  * @param document 当前文档
  */
 function globalSearch() {
 }
-/** 预判函数：检查单词后面是否紧跟 "("，以此来判断它是否可能是 Mixin 调用
- * @param wordRange 当前单词的范围
+/**
+ * 基于行号的 Mixin 可能性筛查工具函数
  * @param document 当前文档对象
- * @returns 紧跟在单词后面的字符，如果是 "(" 则很可能是 Mixin 调用，否则不是
+ * @param line 目标行号
+ * @returns {boolean} 如果该行看起来像 Mixin 定义，返回 true
  */
-function mixinProbabilityScreening(wordRange: vscode.Range, document: vscode.TextDocument) {
-    // 我们构建一个范围：从单词结束位置开始，往后取 1 个字符
-    const nextCharPos = new vscode.Position(
-        wordRange.end.line,
-        // line 行号不变，character 字符位置往后移 1
-        wordRange.end.character
-    );
-    const nextCharRange = new vscode.Range(nextCharPos, nextCharPos.translate(0, 1));
-    const nextChar = document.getText(nextCharRange);
-    console.log(`预判结果: ${nextChar === '(' ? '可能是 Mixin' : '不是 Mixin'}`);
-    return nextChar;
+function mixinProbabilityScreening(
+    document: vscode.TextDocument,
+    line: number
+): boolean {
+    // 1. 获取行文本
+    const text = document.lineAt(line).text.trim();
+    if (!text) {return false;}
+    // 2. 找到最后一个左括号
+    const lastOpenParenIndex = text.indexOf('(');
+    if (lastOpenParenIndex === -1) {return false;} // 没有括号肯定不是函数调用
+    // 3. 提取括号前的内容（向后截取直到遇到非单词字符）
+    // 比如 "background: .my-mixin(red);" -> 提取出 "my-mixin"
+    let nameEnd = lastOpenParenIndex;
+    let nameStart = lastOpenParenIndex;
+    // 向前遍历寻找函数名的起始位置
+    while (nameStart > 0 && /[a-zA-Z0-9_.\.\-\#\$@]/.test(text[nameStart - 1])) {
+        nameStart--;
+    }
+    // 比如 "background: .my-mixin(red)" -> 排除可能的冒号"background':' .my-mixin(red)"
+    if (nameStart > 0 && text[nameStart -1] === ":" || text[nameStart -2] === ":") {
+        return false;
+    }    
+    const potentialName = text.substring(nameStart, nameEnd).trim();
+    // 4. 核心判断：这个名字看起来像 Mixin 吗？
+    // 排除纯数字、排除常见 CSS 函数 (黑名单)
+    const cssFunctions = ['url', 'rgb', 'rgba', 'calc', 'var', 'translate', 'rotate'];
+    if (!potentialName || cssFunctions.includes(potentialName)) {
+        return false;
+    }
+    // 5. 通过初筛
+    console.log(`可能是 Mixin: ${potentialName}`);
+    return true;
 }
 /** 辅助函数：向上查找 Mixin 的定义,返回所在的行号
  * @param document 当前文档对象
@@ -127,11 +148,30 @@ function findMixinDefinition(document: vscode.TextDocument, mixinName: string, c
         const lineText = document.lineAt(i).text.trim();
         // 3. 初步匹配：看这行有没有 "名字("
         if (regex.test(lineText)) {
-            // 3.1 调用新工具函数，一行搞定参数提取
-            const paramsString = extractMixinParams(document, i);
-            console.log(`找到定义在第 ${i} 行，参数为: [${paramsString}]`);
-            // 3. 继续执行原本的注释搜索逻辑...
-            return i;
+            let existingLtem = false;
+            for(let i1 = i; existingLtem === false ; ) {
+                const lineText = document.lineAt(i1).text.trim();
+                if (lineText.includes(";")) {
+                    break;
+                } else if (lineText.includes("(")) {
+                    for(; ; i1++) {
+                        const lineText = document.lineAt(i1).text.trim();
+                        if (lineText.includes("{") && lineText.includes(")")) {
+                            existingLtem = true;
+                            break;
+                        } else if (lineText.includes(";")) {
+                            break;
+                        }
+                    }
+                } else {break;}
+            }
+            if (existingLtem) {
+                // 3.1 调用新工具函数，一行搞定参数提取
+                // const paramsString = extractMixinParams(document, i);
+                // console.log(`找到定义在第 ${i} 行，参数为: [${paramsString}]`);
+                // 3. 继续执行原本的注释搜索逻辑...
+                return i;                
+            }
         }
     }
     return undefined; // 没找到
