@@ -1,71 +1,135 @@
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
 const lookup = new Map<string,Record<string, string[]| undefined> >();
-let config = {
-    searchMode:'map',
-    troubleshootingMode:'strict',
+let featurePack: vscode.Disposable | undefined;
+let config:mixinConfig = {
+    searchMode:"map",
+    troubleshootingMode:"strict",
+    syncMapOnOpen:true,
+    syncMapOnSave:false,
 };
 export function activate(context: vscode.ExtensionContext) {
-    console.log('🚀 插件已激活！正在监听 .less 文件...');
-    // 核心逻辑函数
-    const configs = vscode.workspace.getConfiguration('MixinHelper');
-    config.searchMode = configs.get<string>('searchMode','map');
-    config.troubleshootingMode = configs.get<string>('troubleshootingMode','strict');
-    console.log(`模式: ${config.searchMode},排查:${config.troubleshootingMode}`);
+    initialize(context);
     context.subscriptions.push(
-        vscode.workspace.onDidOpenTextDocument((doc) => {
-            if(config.searchMode !== 'map') {return;};
-            const a = new dispatcher(new searchExecutor(doc),'mapDisposable');
-            a.trigger({source:'open'});
-            console.log('第1次触发onDidOpenTextDocument');
-        }),
-        vscode.workspace.onDidSaveTextDocument((doc) => {
-            if(config.searchMode !== 'map') {return;};
-            const a = new dispatcher(new searchExecutor(doc),'mapDisposable');
-            a.trigger({source:'switch'});
-            console.log('第2次触发onDidSaveTextDocument');
-        }),
-        vscode.window.onDidChangeActiveTextEditor((editor) => {
-            if(config.searchMode !== 'map') {return;};
-            if(editor && editor.document) {
-                const path = editor.document.uri.fsPath;
-                if(!lookup.has(path)) {
-                        const a = new dispatcher(new searchExecutor(editor.document),'mapDisposable');
-                        a.trigger({source:'switch'});
-                    console.log('第3次触发onDidChangeActiveTextEditor');
-                }
-            }
+        vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            initialize(context);
         })
     );
+    context.subscriptions.push(
+        vscode.workspace.onDidGrantWorkspaceTrust(() => {
+            initialize(context);
+        })
+    );
+}
+function initialize(context: vscode.ExtensionContext) {
+    console.log('NixinHelper 正在激活...');
+    if (!vscode.workspace.isTrusted) {
+        console.warn('⚠️ 当前工作区未受信任,MixinHelper 将保持静默状态以确保安全。');
+        return;
+    }
+    console.log("环境就绪,开始同步 MAP...");
+    updateConfig();
+    console.log(`模式: ${config.searchMode},排查:${config.troubleshootingMode},打开时同步MAP:${config.syncMapOnOpen},保存时同步MAP:${config.syncMapOnSave}`);
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
-            if (e.affectsConfiguration('MixinHelper.searchMode')) {
+            if (!e.affectsConfiguration("MixinHelper")) {return;}
+            console.log("触发IV设置更改");
+            if (e.affectsConfiguration("MixinHelper.searchMode")) {
                 const currentsearchMode = config.searchMode;
-                config.searchMode = getSearchMode();
-                if(currentsearchMode !=='map' && config.searchMode === 'map') {
-                    console.log(`模式: ${config.searchMode},排查:${config.troubleshootingMode}`);
+                updateConfig("searchMode");
+                if(currentsearchMode !=="map" && config.searchMode === "map") {
+                    console.log(`模式: ${config.searchMode}`);
+                    updateSubscriptions(context,config);
                     const doc = vscode.window.activeTextEditor;
                     if(doc && doc.document) {
-                        const a = new dispatcher(new searchExecutor(doc.document),'mapDisposable');
-                        a.trigger({source:'switch'});
-                        console.log('第4次触发onDidChangeConfiguration');
+                        const a = new dispatcher(new searchExecutor(doc.document),"mapDisposable");
+                        a.trigger({source:"switch"});
                     }
-                }                
-            }
-            if (e.affectsConfiguration('MixinHelper.troubleshootingMode')) {
-                const configs = vscode.workspace.getConfiguration('MixinHelper');
-                config.troubleshootingMode = configs.get<string>('troubleshootingMode','strict');
-                console.log(`模式: ${config.searchMode},排查:${config.troubleshootingMode}`);
+                }
+            } else {
+                const targetkey = [
+                    "troubleshootingMode",
+                    "syncMapOnOpen",
+                    "syncMapOnSave",
+                ];
+                for (const key of targetkey) {
+                    const fullkey = `MixinHelper.${key}`;
+                    const configkey = config[key as keyof mixinConfig];
+                    if (e.affectsConfiguration(fullkey)) {
+                        updateConfig(key);
+                        updateSubscriptions(context,config);
+                        console.log(`配置项${key}以变更,当前值为:${configkey}`);
+                        break;
+                    }
+                };                
             }
         })
     );
     context.subscriptions.push(
-        vscode.languages.registerHoverProvider(('less'),{
+        vscode.languages.registerHoverProvider(("less"),{
             provideHover
         })
     );
-    updateSubscriptions(context);
+    updateSubscriptions(context,config);
 }
-function updateSubscriptions(context: vscode.ExtensionContext) {
+function updateSubscriptions(context: vscode.ExtensionContext,configs:mixinConfig) {
+    // 1. 【关键步骤】先销毁并清空旧的动态监听器
+    if (featurePack) {featurePack.dispose();}
+    const config = configs;
+    const disposable: vscode.Disposable[] = [];
+    // 2. 注册新的监听器
+    //map订阅监听器    
+    if (config.searchMode === "map") {
+        //触发I打开文件
+        if(config.syncMapOnOpen){
+        disposable.push(vscode.workspace.onDidOpenTextDocument((doc) => {
+            if(config.searchMode !== "map") {return;};
+            const a = new dispatcher(new searchExecutor(doc),"mapDisposable");
+            a.trigger({source:"open"});
+            console.log("触发I打开文件");
+        }));}
+        //触发II保存文件
+        if(config.syncMapOnSave){
+        disposable.push( vscode.workspace.onDidSaveTextDocument((doc) => {
+            if(config.searchMode !== "map") {return;};
+            const a = new dispatcher(new searchExecutor(doc),"mapDisposable");
+            a.trigger({source:"switch"});
+            console.log("触发II保存文件");
+        }));}
+        //触发III切换文件
+        disposable.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
+            if(config.searchMode !== "map") {return;};
+            if(editor && editor.document) {
+                const path = editor.document.uri.fsPath;
+                if(!lookup.has(path)) {
+                    const a = new dispatcher(new searchExecutor(editor.document),"mapDisposable");
+                    a.trigger({source:"switch"});
+                    console.log("触发III切换文件");
+                }
+            }
+        }));
+    }
+    console.log(`准备订阅${disposable.length}个`);
+    if(disposable.length > 0) {
+        // 3. 存入临时池（用于下次更新时销毁）
+        featurePack = vscode.Disposable.from(...disposable);
+        // 4. 同时也推入 context（确保插件彻底卸载时也能被清理，双重保险）
+        context.subscriptions.push(featurePack);
+    } else {
+        featurePack = undefined;
+    }
+}
+function updateConfig(target?:string){
+    const configs = vscode.workspace.getConfiguration("MixinHelper");
+    if(target === "searchMode"){config[target] = configs.get<string>(target,"map");}
+    else if(target === "troubleshootingMode"){config[target] = configs.get<string>(target,"strict");}
+    else if(target === "syncMapOnOpen"){config[target] = configs.get<boolean>(target,true);}
+    else if(target === "syncMapOnSave"){config[target] = configs.get<boolean>(target,false);}
+    else {
+        config.searchMode = configs.get<string>("searchMode","map");
+        config.troubleshootingMode = configs.get<string>("troubleshootingMode","strict");
+        config.syncMapOnOpen = configs.get<boolean>("syncMapOnOpen",true);
+        config.syncMapOnSave = configs.get<boolean>("syncMapOnSave",false);
+    }
 }
 /**
  * 提供悬停提示
@@ -82,40 +146,15 @@ function updateSubscriptions(context: vscode.ExtensionContext) {
  * 作用：它是“紧急刹车”。如果用户鼠标移得太快，VS Code 觉得刚才那个请求没必要了，就会通过这个 token 通知你：“别算了，停下！”（防止插件卡顿）。
  */
 function provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken) {
-    if (config.searchMode ===  'map') {
-        const toolkit = new processor(document);   
-        const nextChar = toolkit.mixinProbabilityScreening(position.line);
-        if (nextChar) {
-            const lineText = document.lineAt(position.line).text;
-            const match = lineText.match(/\b([a-zA-Z0-9_-]+)\b/);
-            const key = match?.[1];
-            if (key) {
-                const docId = document.uri.fsPath;
-                const value = lookup.get(docId);
-                if(value) {
-                    const mixinData = value[key];
-                    const commentContent = toolkit.normalizeHoverContent({position:position,currentMode:'2',inputtext2:mixinData});
-                    return commentContent;
-                }
-            }
-        }
-        return undefined; 
-    } else if (config.searchMode === 'realtime' ) {
-        const a = new dispatcher(new searchExecutor(document),'realtime');
-        const commentContent = a.trigger({position:position});
-        if (commentContent) {
-            return commentContent;
-        } else {
-            return undefined;
-        }
+    const a = new dispatcher(new searchExecutor(document),config.searchMode);
+    const commentContent = a.trigger({position:position});
+    if (commentContent) {
+        return commentContent;
+    } else {
+        return undefined;
     }
 }
-function getSearchMode() {
-    const config = vscode.workspace.getConfiguration('MixinHelper');
-    // 获取具体属性值，并设置默认值为 'map'
-    const searchMode = config.get<string>('searchMode', 'map');
-    return searchMode;
-}
+//================= 2. 悬停的主要class区 ================= //
 /** 纯工具函数：
  * 只管接收输入并稳定输出，绝不返回空值，输入啥奇怪东西就吐啥奇怪结果，不掺和业务逻辑。 */
 class utils {
@@ -244,7 +283,7 @@ class processor {
         // if (!potentialName || cssFunctions.includes(potentialName)) {return false;}
         if (!potentialName) {return false;}
         // 5. 通过初筛
-        console.log(`可能是 Mixin: ${potentialName}`);
+        // console.log(`可能是 Mixin: ${potentialName}`);
         return true;
     }
     /** 辅助函数：向上查找 Mixin 的定义,返回所在的行号
@@ -374,7 +413,7 @@ class processor {
         const z = udispatcher.trigger({line:i});
         if(z){b.push(i);}
     }
-    console.log(b);
+    // console.log(b);
     if (!b){return undefined;}
     let d:number[] = [];    
     b.forEach(input => {
@@ -441,7 +480,7 @@ class processor {
                 txt = input.inputtext1;
             }             
         }
-        console.log('📝 当前注释:', txt);
+        //console.log('📝 当前注释:', txt);
         // 1. 创建 Markdown 内容对象
         const hoverContent = new vscode.MarkdownString();
         // 2. 开启 HTML 支持（可选，但建议开启以支持更多样式）
@@ -527,6 +566,32 @@ class searchExecutor {
             console.error("错误堆栈",error);
         }
     }
+    map(position: vscode.Position):vscode.Hover | undefined {
+        /** 
+         * Phase 1-1 ID ↘
+         *   Phase 2-1 set 方式 val ↘
+         *     Phase 3-1 数组的最终层 ←
+         *     Phase 3-2 数组的第2个 val
+         *   Phase 2-2 Phase 3的 key
+         * Phase 1-2 ID
+         */
+        const toolkit = new processor(this.document);   
+        const phase = toolkit.mixinProbabilityScreening(position.line);
+        if (phase) {
+            const lineText = this.document.lineAt(position.line).text;
+            const match = lineText.match(/\b([a-zA-Z0-9_-]+)\b/);
+            const key = match?.[1];
+            if (key) {
+                const docId = this.document.uri.fsPath;
+                const phaseI = lookup.get(docId);// Phase 1
+                if(phaseI) {
+                    const phaseII = phaseI[key];//Phase 2
+                    const phaseIII = toolkit.normalizeHoverContent({position:position,currentMode:'2',inputtext2:phaseII});
+                    return phaseIII;//Phase 3
+                }
+            }
+        }
+    }
 }
 /** 核心调度器 
  * 负责管理业务逻辑分发与状态控制。
@@ -572,7 +637,7 @@ class dispatcher{
                     this.executionGoals.handleDocumentUpdate(ctx.source);
                     return undefined;
                 } else {
-                    console.log("⚠️ Map模式缺少必要参数: source");
+                    console.log("⚠️ Map初始化缺少必要参数: source");
                     return;
                 }
             },
@@ -581,10 +646,19 @@ class dispatcher{
                     const a = this.executionGoals.startupfunction(ctx.position);
                     return a;
                 } else {
-                    console.log("⚠️ Realtime模式缺少必要参数: position/line");
+                    console.log("⚠️ Realtime模式缺少必要参数: position");
                     return;
                 }
             },
+            'map': (ctx:taskConstext) => {
+                if(ctx.position !== undefined) {
+                    const a = this.executionGoals.map(ctx.position);
+                    return a;
+                } else {
+                    console.log("⚠️ Map模式缺少必要参数: position");
+                    return;
+                }
+            }, 
         };
         const task = taskMap[this.currentMode as keyof typeof taskMap];
         if (task) {
@@ -613,5 +687,11 @@ interface taskConstext {
     source?:string;
     position?: vscode.Position;
     line?:number;
-} 
+}
+interface mixinConfig {
+    searchMode:string,
+    troubleshootingMode:string,
+    syncMapOnOpen:boolean,
+    syncMapOnSave:boolean,
+}
 export function deactivate() {}
