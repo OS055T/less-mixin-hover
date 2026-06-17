@@ -1,0 +1,135 @@
+{
+  "name": "less-mixin-hover",
+  "displayName": "Less Mixin Hover",
+  "description": "为 Less 文件中的 Mixin 调用提供悬停提示，自动显示其定义上方的文档注释，支持 Markdown 格式，提升代码可读性与开发效率。 ",
+  "version": "0.0.3",
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:less"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "less-mixin-hover.refreshMapCache",
+        "title": "MixinHelper: 刷新 Map 缓存",
+        "category": "Less Mixin Hover"
+      }
+    ],
+    "configuration": {
+      "title": "MixinHelper",
+      "properties": {
+        "MixinHelper.searchMode": {
+          "type": "string",
+          "default": "map",
+          "enum": [
+            "map",
+            "realtime"
+          ],
+          "enumDescriptions": [
+            "高性能模式：仅在打开/保存时扫描，鼠标悬停直接查表（推荐）",
+            "兼容模式：每次悬停实时解析代码（适合调试或极小文件）"
+          ],
+          "description": "选择 Mixin 备注的获取策略",
+          "markdownDescription": "**决定插件如何获取 Mixin 的备注信息。**\n\n- **map (高性能/推荐)**：\n  - **原理**：仅在文件打开或保存时扫描全篇代码，建立索引。鼠标悬停时直接查表，速度极快。\n  - **优势**：支持跳转到任意位置的 Mixin，即使它定义在光标下方也能识别；支持同名 Mixin 区分。\n\n- **realtime (实时/兼容)**：\n  - **原理**：每次鼠标悬停时，才临时解析代码。\n  - **限制**：**只能向上查找**。如果你习惯将 Mixin 写在调用处的下方，此模式将无法识别。且不支持同名 Mixin 的智能匹配，只会显示距离最近的一个。\n\n---\n**💡 调试技巧：**\n如果遇到识别问题，可以查看输出日志排查原因。按 `Ctrl + Shift + U` 打开输出面板，选择 \"Less Mixin Hover\" 查看详细记录。"
+        },
+        "MixinHelper.syncMapOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "**打开文件时自动扫描。**\n\n 开启后，每次打开 Less 文件，插件会自动读取并更新 Mixin 列表。如果文件特别大导致打开变慢，可以关闭此项改为手动刷新。"
+        },
+        "MixinHelper.syncMapOnSave": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "**保存文件时自动刷新。**\n\n 开启后，当你按下 Ctrl+S 保存代码时，插件会立即重新分析文件，确保提示列表是最新的。如果你习惯频繁保存但很少新增 Mixin 建议保持关闭以减少干扰。"
+        },
+        "MixinHelper.syncMapOnFocus": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "**切换文本编辑器时自动刷新**。\n\n 开启后，当你在不同文件间切换焦点时，插件会立即更新一份新的MAP。此操作不会覆盖原有数据，若已有对应数据则不会再次创建！"
+        },
+        "MixinHelper.enableNotification": {
+          "type": "string",
+          "default": "logSilently",
+          "enum": [
+            "showOutputOnLog",
+            "popupWithoutLog",
+            "logSilently",
+            "disableNotifications"
+          ],
+          "enumDescriptions": [
+            "【全开】记录日志到后台，并在每次更新时自动弹出 Output 面板",
+            "【仅通知】允许通知弹窗提示，但不记录日志",
+            "【仅日志】记录日志到后台，但不自动弹出 Output 面板（推荐）",
+            "【全关】完全静默，禁用所有通知和日志输出"
+          ],
+          "description": "控制 F1/ctrl shift p 的通知与日志显示行为"
+        },
+        "MixinHelper.advancedSettings": {
+          "type": "object",
+          "markdownDescription": "**插件高级设置 (Advanced Settings)**\n\n集中管理进阶控制选项（性能与解析逻辑）：\n\n- **Max Percentage / Mixin Count**：双重截断机制。前者限制读取行数比例，后者限制最大收集数量，叠加使用可大幅提升大文件性能。\n- **Troubleshooting Mode**：严格模式。决定当冒号 `:` 与调用写在同一行时，是否将其视为有效引用。\n\n> 💡 **填写示例**：\n> ```json\n> {\n>   \"maxPercentage\": 50,\n>   \"maxMixinCount\": 10,\n>   \"troubleshootingMode\": \"strict\"\n> }\n> ```",
+          "default": {},
+          "properties": {
+            "maxPercentage": {
+              "type": "number",
+              "default": 50,
+              "minimum": 0,
+              "maximum": 100,
+              "markdownDescription": "**[I/O 截断]** 例如设为 50,插件只会读取文件的前一半,后面的代码直接跳过不看。"
+            },
+            "maxMixinCount": {
+              "type": "number",
+              "default": 10,
+              "minimum": 0,
+              "markdownDescription": "**[结果截断]** 无论文件多长，只要收集到指定数量的 Mixin,就会停止往 Map 中写入新数据。"
+            },
+            "troubleshootingMode": {
+              "type": "string",
+              "default": "strict",
+              "enum": [
+                "strict",
+                "losse"
+              ],
+              "enumDescriptions": [
+                "严格匹配：包含':'时不会在MAP模式记录",
+                "宽松匹配：包含':'时会在MAP模式记录"
+              ],
+              "markdownDescription": "**决定当 Mixin 和调用写在同一行时，是否将其视为“引用”。**\n\n- **strict (严格)**：如果代码中包含冒号 `:`，插件会认为这是 CSS 属性赋值，从而**忽略**该行。\n- **losse (宽松)**：即使包含冒号 `:`，插件也会强制识别为 Mixin 引用。\n\n---\n**示例：** `.mixin() { color: red; }`\n在 strict 模式下，因为存在冒号，该行会被跳过。"
+            }
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.120.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "typescript-eslint": "^8.56.1",
+    "eslint": "^9.39.3",
+    "esbuild": "^0.27.3",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}

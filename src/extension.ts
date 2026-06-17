@@ -1,153 +1,245 @@
 import * as vscode from "vscode";
-const lookup = new Map<string,Record<string, string[]| undefined> >();
+import { massageUtils } from "./utils/logger";
+const lookup = new Map<string, Record<string, string[] | undefined>>();
 let featurePack: vscode.Disposable | undefined;
-let config:mixinConfig = {
-    searchMode:"map",
-    troubleshootingMode:"strict",
-    syncMapOnOpen:true,
-    syncMapOnSave:false,
+/**
+ * 【注意事项】
+ * - 严禁直接修改 `DEFAULT_..._MAP` 中的值，它们是只读的基准。
+ * - 新增配置项时，需同步更新 Interface 和 Default Map，否则会导致 TS 编译报错或运行时丢失默认值。
+ */
+// 1. 运行时状态层 (Runtime State - let ...)
+let config: mixinConfig = {
+    searchMode: "map",
+    syncMapOnOpen: true,
+    syncMapOnSave: false,
+    syncMapOnFocus: true,
 };
+let advancedConfig: advancedmixinConfig = {
+    maxPercentage: 50,
+    maxMixinCount: 10,
+    troubleshootingMode: "strict",
+};
+// 2. 静态常量层 (Static Defaults - const ... as const)
+const DEFAULT_CONFIG_MAP: mixinConfig = {
+    searchMode: "map",
+    syncMapOnOpen: true,
+    syncMapOnSave: false,
+    syncMapOnFocus: true,
+} as const;
+const DEFAULT_ADVANCED_CONFIG_MAP: advancedmixinConfig = {
+    maxPercentage: 50,
+    maxMixinCount: 10,
+    troubleshootingMode: "strict",
+} as const;
+// 3. 接口定义层 (Interfaces)
+interface mixinConfig {
+    searchMode: string,
+    syncMapOnOpen: boolean,
+    syncMapOnSave: boolean,
+    syncMapOnFocus: boolean,
+};
+interface advancedmixinConfig {
+    maxPercentage: number,
+    maxMixinCount: number,
+    troubleshootingMode: string,
+}
+/**
+ * @interface TaskContext
+ * @description 【通用上下文数据包】用于在系统各层级间传递数据的标准化容器。
+ *              所有的输入参数在进入 trigger() 之前，必须按照此结构进行组装。
+ *
+ * @packing_rules [打包准则 / Packing Protocol]
+ * 1. **单一入口原则**：禁止向 trigger 传递零散参数（如 doc, line），必须在调用前封装为此对象。
+ * 2. **字段职责分离**：
+ *    - source: 专用于 map 模式，承载文档全文内容。
+ *    - position: 专用于 realtime 模式，承载光标位置信息。
+ * 3. **防御性打包**：如果不确定某个字段是否有值，请显式传入 undefined，不要省略键名。
+ *
+ * @property {string} [source] - [Map模式专用] 区分哪个监听器打开的
+ * @property {vscode.Position} [position] - [Realtime模式专用] VS Code 原生位置对象。
+ */
+interface taskConstext {
+    source?: string;
+    position?: vscode.Position;
+    line?: number;
+};
+//================= 1. 关键函数入口 ================= //
 export function activate(context: vscode.ExtensionContext) {
-    initialize(context);
+    const initialization = new initialize(context);
+    initialization.trigger();
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
-            initialize(context);
+            initialization.trigger();
         })
     );
     context.subscriptions.push(
         vscode.workspace.onDidGrantWorkspaceTrust(() => {
-            initialize(context);
+            initialization.trigger();
         })
     );
 }
-function initialize(context: vscode.ExtensionContext) {
-    console.log('NixinHelper 正在激活...');
-    if (!vscode.workspace.isTrusted) {
-        console.warn('⚠️ 当前工作区未受信任,MixinHelper 将保持静默状态以确保安全。');
-        return;
+class initialize {
+    private context: vscode.ExtensionContext;
+    constructor(
+        context: vscode.ExtensionContext,
+    ) {
+        this.context = context;
     }
-    console.log("环境就绪,开始同步 MAP...");
-    updateConfig();
-    console.log(`模式: ${config.searchMode},排查:${config.troubleshootingMode},打开时同步MAP:${config.syncMapOnOpen},保存时同步MAP:${config.syncMapOnSave}`);
-    context.subscriptions.push(
-        vscode.workspace.onDidChangeConfiguration((e) => {
-            if (!e.affectsConfiguration("MixinHelper")) {return;}
-            console.log("触发IV设置更改");
-            if (e.affectsConfiguration("MixinHelper.searchMode")) {
-                const currentsearchMode = config.searchMode;
-                updateConfig("searchMode");
-                if(currentsearchMode !=="map" && config.searchMode === "map") {
-                    console.log(`模式: ${config.searchMode}`);
-                    updateSubscriptions(context,config);
-                    const doc = vscode.window.activeTextEditor;
-                    if(doc && doc.document) {
-                        const a = new dispatcher(new searchExecutor(doc.document),"mapDisposable");
-                        a.trigger({source:"switch"});
+    trigger() {
+        console.log('NixinHelper 正在激活...');
+        if (!vscode.workspace.isTrusted) {
+            console.warn('⚠️ 当前工作区未受信任,MixinHelper 将保持静默状态以确保安全。');
+            return;
+        }
+        console.log("环境就绪,开始同步 MAP...");
+        this.updateConfig();
+        this.updateConfigBeta();
+        console.log(`基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
+        console.log(`高级设置 最大百分比: ${advancedConfig.maxPercentage},最大Mixin数:${advancedConfig.maxMixinCount},排查模式:${advancedConfig.troubleshootingMode}`);
+        //设置更改
+        this.context.subscriptions.push(
+            vscode.workspace.onDidChangeConfiguration((e) => {
+                if (!e.affectsConfiguration("MixinHelper")) { return; }
+                console.log("触发IV设置更改");
+                if (e.affectsConfiguration("MixinHelper.advancedSettings")) {
+                    this.updateConfigBeta();
+                } else {
+                    const keys = Object.keys(DEFAULT_CONFIG_MAP) as Array<keyof typeof DEFAULT_CONFIG_MAP>;
+                    for (const key of keys) {
+                        const fullKey = `MixinHelper.${key}`;
+                        if (e.affectsConfiguration(fullKey)) {
+                            this.updateConfig(key);
+                            this.updateSubscriptions();
+                            const configkey = config[key];
+                            console.log(`配置项 ${key} 已变更，当前值为: ${configkey}`);
+                            break;
+                        }
                     }
                 }
-            } else {
-                const targetkey = [
-                    "troubleshootingMode",
-                    "syncMapOnOpen",
-                    "syncMapOnSave",
-                ];
-                for (const key of targetkey) {
-                    const fullkey = `MixinHelper.${key}`;
-                    const configkey = config[key as keyof mixinConfig];
-                    if (e.affectsConfiguration(fullkey)) {
-                        updateConfig(key);
-                        updateSubscriptions(context,config);
-                        console.log(`配置项${key}以变更,当前值为:${configkey}`);
-                        break;
-                    }
-                };                
-            }
-        })
-    );
-    context.subscriptions.push(
-        vscode.languages.registerHoverProvider(("less"),{
-            provideHover
-        })
-    );
-    updateSubscriptions(context,config);
-}
-function updateSubscriptions(context: vscode.ExtensionContext,configs:mixinConfig) {
-    // 1. 【关键步骤】先销毁并清空旧的动态监听器
-    if (featurePack) {featurePack.dispose();}
-    const config = configs;
-    const disposable: vscode.Disposable[] = [];
-    // 2. 注册新的监听器
-    //map订阅监听器    
-    if (config.searchMode === "map") {
-        //触发I打开文件
-        if(config.syncMapOnOpen){
-        disposable.push(vscode.workspace.onDidOpenTextDocument((doc) => {
-            if(config.searchMode !== "map") {return;};
-            const a = new dispatcher(new searchExecutor(doc),"mapDisposable");
-            a.trigger({source:"open"});
-            console.log("触发I打开文件");
-        }));}
-        //触发II保存文件
-        if(config.syncMapOnSave){
-        disposable.push( vscode.workspace.onDidSaveTextDocument((doc) => {
-            if(config.searchMode !== "map") {return;};
-            const a = new dispatcher(new searchExecutor(doc),"mapDisposable");
-            a.trigger({source:"switch"});
-            console.log("触发II保存文件");
-        }));}
-        //触发III切换文件
-        disposable.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
-            if(config.searchMode !== "map") {return;};
-            if(editor && editor.document) {
-                const path = editor.document.uri.fsPath;
-                if(!lookup.has(path)) {
-                    const a = new dispatcher(new searchExecutor(editor.document),"mapDisposable");
-                    a.trigger({source:"switch"});
-                    console.log("触发III切换文件");
+            })
+        );
+        //鼠标悬停
+        this.context.subscriptions.push(
+            vscode.languages.registerHoverProvider(("less"), {
+                provideHover
+            })
+        );
+        this.context.subscriptions.push(
+            vscode.commands.registerCommand("less-mixin-hover.refreshMapCache", async () => {
+                const editor = vscode.window.activeTextEditor;
+                if (!editor) { return; }
+                try {
+                    //await new searchExecutor(editor.document).handleDocumentUpdate("switch");
+                    massageUtils.showInfo("加载完成");
+                    massageUtils.logOdjct("当前缓存内容", lookup);
+                } catch (error) {
+                    massageUtils.showInfo(`${error}`);
                 }
+            })
+        );
+        this.updateSubscriptions();
+    }
+    private updateSubscriptions() {
+        // 1. 【关键步骤】先销毁并清空旧的动态监听器
+        if (featurePack) { featurePack.dispose(); }
+
+        const disposable: vscode.Disposable[] = [];
+        // 2. 注册新的监听器
+        //map订阅监听器    
+        if (config.searchMode === "map") {
+            const handleMapTrigger = (doc: vscode.TextDocument, sourceType: string = "switch") => {
+                const a = new dispatcher(new searchExecutor(doc), "mapDisposable");
+                a.trigger({ source: sourceType });
+            };
+            //触发I打开文件
+            if (config.syncMapOnOpen) {
+                disposable.push(vscode.workspace.onDidOpenTextDocument((doc) => {
+                    if (config.searchMode !== "map") { return; };
+                    handleMapTrigger(doc, "open");
+                    console.log("触发I打开文件");
+                }));
             }
-        }));
+            //触发II保存文件
+            if (config.syncMapOnSave) {
+                disposable.push(vscode.workspace.onDidSaveTextDocument((doc) => {
+                    handleMapTrigger(doc);
+                    console.log("触发II保存文件");
+                }));
+            }
+            //触发III切换文件
+            if (config.syncMapOnFocus) {
+                disposable.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
+                    if (config.searchMode !== "map") { return; };
+                    if (editor && editor.document) {
+                        const path = editor.document.uri.fsPath;
+                        if (!lookup.has(path)) {
+                            handleMapTrigger(editor.document);
+                            console.log("触发III切换文件");
+                        }
+                    }
+                }));
+            }
+        }
+        console.log(`MAP准备订阅${disposable.length}个`);
+        if (disposable.length > 0) {
+            // 3. 存入临时池（用于下次更新时销毁）
+            featurePack = vscode.Disposable.from(...disposable);
+            // 4. 同时也推入 context（确保插件彻底卸载时也能被清理，双重保险）
+            this.context.subscriptions.push(featurePack);
+        } else {
+            featurePack = undefined;
+        }
     }
-    console.log(`准备订阅${disposable.length}个`);
-    if(disposable.length > 0) {
-        // 3. 存入临时池（用于下次更新时销毁）
-        featurePack = vscode.Disposable.from(...disposable);
-        // 4. 同时也推入 context（确保插件彻底卸载时也能被清理，双重保险）
-        context.subscriptions.push(featurePack);
-    } else {
-        featurePack = undefined;
+    private updateConfig<T extends keyof typeof DEFAULT_CONFIG_MAP>(
+        target?: T,
+    ) {
+        if (target) {
+            const configs = vscode.workspace.getConfiguration("MixinHelper");
+            // 组装当前默认值
+            const defaultVal = DEFAULT_CONFIG_MAP[target];
+            // 获取VS code对应的当前值
+            const val = configs.get<mixinConfig[T]>(target, defaultVal);
+            // console.log("[调试]VS Code 返回的原始配置对象:", JSON.stringify(val, null, 2));
+            // 写入自身全局变量
+            (config as any)[target] = configs.get(target, val);
+        } else {
+            for (const key of Object.keys(DEFAULT_CONFIG_MAP) as Array<keyof typeof DEFAULT_CONFIG_MAP>) {
+                // 这里复用了上面的逻辑，或者直接调用 updateConfig(key)
+                this.updateConfig(key);
+            }
+        }
+    }
+    private updateConfigBeta<T extends keyof typeof DEFAULT_ADVANCED_CONFIG_MAP>(
+        target?: T
+    ) {
+        const configs = vscode.workspace.getConfiguration("MixinHelper");
+        // 获取VS code对应的当前项
+        const rawAdvancedObj = configs.get("advancedSettings") as any;
+        const processKey = (key: keyof typeof DEFAULT_ADVANCED_CONFIG_MAP) => {
+            // 尝试从用户配置中获取当前项
+            const userValue = rawAdvancedObj[key];
+            // 获取默认值作为兜底
+            const defaultValue = DEFAULT_ADVANCED_CONFIG_MAP[key];
+            // 写入全局变量 advancedConfig
+            (advancedConfig as any)[key] = userValue !== undefined ? userValue : defaultValue;
+        };
+        if (target) {
+            // --- 场景 A：指定了目标（通常是配置变更监听触发） ---
+            console.log(`[Beta Update] 正在更新单项: ${String(target)}`);
+            processKey(target);
+        } else {
+            // --- 场景 B：未指定目标（通常是插件启动时的初始化） ---
+            // console.log("[Beta Init] 正在初始化所有高级配置...");
+            // console.log("[调试]VS Code 返回的原始配置对象:", JSON.stringify(rawAdvancedObj, null, 2));
+            for (const key of Object.keys(DEFAULT_ADVANCED_CONFIG_MAP) as Array<keyof typeof DEFAULT_ADVANCED_CONFIG_MAP>) {
+                processKey(key);
+            }
+        }
     }
 }
-function updateConfig(target?:string){
-    const configs = vscode.workspace.getConfiguration("MixinHelper");
-    if(target === "searchMode"){config[target] = configs.get<string>(target,"map");}
-    else if(target === "troubleshootingMode"){config[target] = configs.get<string>(target,"strict");}
-    else if(target === "syncMapOnOpen"){config[target] = configs.get<boolean>(target,true);}
-    else if(target === "syncMapOnSave"){config[target] = configs.get<boolean>(target,false);}
-    else {
-        config.searchMode = configs.get<string>("searchMode","map");
-        config.troubleshootingMode = configs.get<string>("troubleshootingMode","strict");
-        config.syncMapOnOpen = configs.get<boolean>("syncMapOnOpen",true);
-        config.syncMapOnSave = configs.get<boolean>("syncMapOnSave",false);
-    }
-}
-/**
- * 提供悬停提示
- * @param document 【变量1】 document (文档对象)
- * 含义：代表当前用户正在编辑的这个 .less 文件的全部内容。
- * 作用：它是你的“数据库”。你需要通过它来获取文本内容（getText）、获取行数、或者扫描整个文件查找 Mixin 定义。
- * @param position 
- * 【变量2】 position (光标位置)
- * 含义：代表鼠标悬停时的那个精确坐标点（第几行，第几个字符）。
- * 作用：它是你的“瞄准镜”。VS Code 告诉你鼠标在哪，你才能知道用户想看哪个单词的解释。
- * @param token 
- * 【变量3】 token (取消令牌)
- * 含义：这是一个由 VS Code 内核管理的信号标志。
- * 作用：它是“紧急刹车”。如果用户鼠标移得太快，VS Code 觉得刚才那个请求没必要了，就会通过这个 token 通知你：“别算了，停下！”（防止插件卡顿）。
- */
 function provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken) {
-    const a = new dispatcher(new searchExecutor(document),config.searchMode);
-    const commentContent = a.trigger({position:position});
+    const a = new dispatcher(new searchExecutor(document), config.searchMode);
+    const commentContent = a.trigger({ position: position });
     if (commentContent) {
         return commentContent;
     } else {
@@ -161,55 +253,55 @@ class utils {
     private document: vscode.TextDocument;
     constructor(
         document: vscode.TextDocument,
-    ){
+    ) {
         this.document = document;
     }
     /**验证目标行号是否符合Mixin格式
      * 
      * @param  i - 目标行号
      * @returns 布尔值 */
-    validateMixin(i:number):boolean {
+    validateMixin(i: number): boolean {
         const lineText = this.document.lineAt(i).text.trim();
         if ((lineText.startsWith(".") || lineText.startsWith("#")) && lineText.includes("(")) {
-            for(let i2 = i; i2 < this.document.lineCount ; i2++) {
+            for (let i2 = i; i2 < this.document.lineCount; i2++) {
                 const lineText = this.document.lineAt(i2).text.trim();
-                if (lineText.includes(";")) {return false;} 
-                else if (lineText.includes("{") && lineText.includes(")")) {return true;} 
+                if (lineText.includes(";")) { return false; }
+                else if (lineText.includes("{") && lineText.includes(")")) { return true; }
                 // else if (lineText.includes("{")) {return true;}
                 // else if (lineText.includes("}")) {return false;}
             }
         }
         return false;
     }
-    CoarseFilterMS(i:number):boolean {
+    CoarseFilterMS(i: number): boolean {
         const lineText = this.document.lineAt(i).text.trim();
-        if(lineText.includes("(") && !lineText.includes(";") &&!lineText.includes(":")){
+        if (lineText.includes("(") && !lineText.includes(";") && !lineText.includes(":")) {
             return true;
         }
         return false;
     }
-    CoarseFilterML(i:number):boolean {
+    CoarseFilterML(i: number): boolean {
         const lineText = this.document.lineAt(i).text.trim();
-        if(lineText.includes("(") && !lineText.includes(";")){
+        if (lineText.includes("(") && !lineText.includes(";")) {
             return true;
         }
         return false;
     }
 }
-class strategySplitter{
-    private executionGoals:utils;
-    private currentMode:string;
+class strategySplitter {
+    private executionGoals: utils;
+    private currentMode: string;
     constructor(
         executionGoals: utils,
-        initialMode:string,
-    ){
+        initialMode: string,
+    ) {
         this.executionGoals = executionGoals;
         this.currentMode = initialMode;
     }
-    trigger(context:taskConstext) {
+    trigger(context: taskConstext) {
         const taskMap = {
-            'strict':(ctx:taskConstext) => {
-                if(ctx.line !== undefined) {
+            'strict': (ctx: taskConstext) => {
+                if (ctx.line !== undefined) {
                     const a = this.executionGoals.CoarseFilterMS(ctx.line);
                     return a;
                 } else {
@@ -217,8 +309,8 @@ class strategySplitter{
                     return;
                 }
             },
-            'losse': (ctx:taskConstext) => {
-                if(ctx.line !== undefined) {
+            'losse': (ctx: taskConstext) => {
+                if (ctx.line !== undefined) {
                     const a = this.executionGoals.CoarseFilterML(ctx.line);
                     return a;
                 } else {
@@ -244,11 +336,11 @@ class processor {
      * 2. 定义定位：向上回溯查找 Mixin 的具体定义行。
      * 3. 信息提取：获取 Mixin 的参数列表及上方的文档注释 (JSDoc)。
      * @note 实例化时传入 Document 对象后，内部方法将自动共享该上下文，无需重复传参。
-     */    
+     */
     private document: vscode.TextDocument;
     constructor(
         document: vscode.TextDocument,
-    ){
+    ) {
         this.document = document;
     }
     /** 基于行号的 Mixin 可能性筛查工具函数
@@ -260,30 +352,30 @@ class processor {
     ): boolean {
         // 1. 获取行文本
         const text = this.document.lineAt(line).text.trim();
-        if (!text) {return false;}
+        if (!text) { return false; }
         // 2. 找到第一个左括号
-        const lastOpenParenIndex = text.indexOf('(');
-        if (lastOpenParenIndex === -1) {return false;} // 没有括号肯定不是函数调用
-        // 3. 提取括号前的内容（向后截取直到遇到非单词字符）
-        // 比如 "background: .my-mixin(red);" -> 提取出 "my-mixin"
-        let nameEnd = lastOpenParenIndex;
-        let nameStart = lastOpenParenIndex;
-        // 向前遍历寻找函数名的起始位置
-        while (nameStart > 0 && /[a-zA-Z0-9_.\.\-\#\$@]/.test(text[nameStart - 1])) {
-            nameStart--;
-        }
-        // 比如 "background: .my-mixin(red)" -> 排除可能的冒号"background':' .my-mixin(red)"
-        if (nameStart > 0 && text[nameStart -1] === ":" || text[nameStart -2] === ":") {
-            return false;
-        }    
-        const potentialName = text.substring(nameStart, nameEnd).trim();
-        // 4. 核心判断：这个名字看起来像 Mixin 吗？
-        // 排除纯数字、排除常见 CSS 函数 (黑名单)
-        // const cssFunctions = ['url', 'rgb', 'rgba', 'calc', 'var', 'translate', 'rotate'];
-        // if (!potentialName || cssFunctions.includes(potentialName)) {return false;}
-        if (!potentialName) {return false;}
-        // 5. 通过初筛
-        // console.log(`可能是 Mixin: ${potentialName}`);
+        const PhaseI = text.indexOf('(');
+        // 没有括号肯定不是函数调用
+        if (PhaseI === -1) { return false; }
+        const PhaseII = text.substring(0, PhaseI);
+        // [.#]       -> 必须以 . 或 # 开头 (Mixin的特征)
+        // [a-zA-Z0-9_\-@\s]+ -> 中间允许包含字母、数字、下划线、连字符、变量符(@)以及【空格】
+        const match = PhaseII.match(/[.#][a-zA-Z0-9_\-\@\s]+$/);
+        // 如果没匹配到以 . 或 # 开头的片段，说明这可能只是个普通的 CSS 函数 (如 calc, rgba)
+        if (!match) { return false; }
+        // 3. 获取匹配到的原始字符串并去除首尾空格
+        // 比如 "background: .my-mixin" -> 提取出 ".my-mixin"
+        // 比如 "background: . my-mixin" -> 提取出 ". my-mixin" -> trim后变成 ".my-mixin" (或者保留空格视需求而定)
+        let PhaseIII = match[0].trim();
+        // 4. 二次清洗（可选）：防止 ". my-mixin" 这种怪异情况
+        // PhaseIII = PhaseIII.replace(/\s+/g, '');
+        // 5. 排除纯 CSS 函数黑名单 (虽然上面的正则已经排除了大部分，但这层保险更稳)
+        const cssFunctions = ['calc', 'var', 'rgb', 'rgba', 'hsl', 'url'];
+        // 去掉开头的 . 或 # 后检查是否是纯函数名
+        const PhaseIV = PhaseIII.replace(/^[.#]/, '');
+        if (cssFunctions.includes(PhaseIV)) { return false; }
+        // 6. 通过初筛
+        console.log(`可能是 Mixin: ${PhaseIII}`);
         return true;
     }
     /** 辅助函数：向上查找 Mixin 的定义,返回所在的行号
@@ -292,33 +384,34 @@ class processor {
      * @return 提取所在的行号，如果没找到则返回 undefined
      */
     findMixinDefinition(mixinName: string, currentLineIndex: number): number | undefined {
-    // 1. 构建正则：转义特殊字符，并匹配紧跟的左括号 (允许中间有空格)
-    // 比如名字是 .box，正则会匹配 .box( 或 .box (
-    const escapedName = mixinName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // 允许中间有任意字符（比如注释、奇怪的符号），只要最后是 ( 就行
-    // .*? 表示“非贪婪匹配”，会尽快找到第一个 (
-    const regex = new RegExp(`${escapedName}.*?\\(`);
-    // 2. 从当前行的上一行开始，倒序遍历整个文档
-    for (let i = currentLineIndex; i >= 0; i--) {
-        const lineText = this.document.lineAt(i).text.trim();
-        // 3. 初步匹配：看这行有没有 "名字("
-        if (regex.test(lineText)) {
-            let existingLtem = false;
-            for(let input = i; ; ) {
-                const output = new utils(this.document).validateMixin(input);
-                if (output) {existingLtem = true;break;}
-                else {break;}
-            }
-            if (existingLtem) {
-                // 3.1 调用新工具函数，一行搞定参数提取
-                // const paramsString = this.extractMixinParams(i);
-                // console.log(`找到定义在第 ${i} 行，参数为: [${paramsString}]`);
-                // 3. 继续执行原本的注释搜索逻辑...
-                return i;                
+        // 1. 构建正则：转义特殊字符，并匹配紧跟的左括号 (允许中间有空格)
+        // 比如名字是 .box，正则会匹配 .box( 或 .box (
+        const escapedName = mixinName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // 允许中间有任意字符（比如注释、奇怪的符号），只要最后是 ( 就行
+        // .*? 表示“非贪婪匹配”，会尽快找到第一个 (
+        const regex = new RegExp(`${escapedName}.*?\\(`);
+        const util = new utils(this.document);
+        // 2. 从当前行的上一行开始，倒序遍历整个文档
+        for (let i = currentLineIndex; i >= 0; i--) {
+            const lineText = this.document.lineAt(i).text.trim();
+            // 3. 初步匹配：看这行有没有 "名字("
+            if (regex.test(lineText)) {
+                let existingLtem = false;
+                for (let input = i; ;) {
+                    const output = util.validateMixin(input);
+                    if (output) { existingLtem = true; break; }
+                    else { break; }
+                }
+                if (existingLtem) {
+                    // 3.1 调用新工具函数，一行搞定参数提取
+                    // const paramsString = this.extractMixinParams(i);
+                    // console.log(`找到定义在第 ${i} 行，参数为: [${paramsString}]`);
+                    // 3. 继续执行原本的注释搜索逻辑...
+                    return i;
+                }
             }
         }
-    }
-    return undefined; // 没找到
+        return undefined; // 没找到
     }
     /** 跨行提取 Mixin 参数的工具函数,提取到的参数字符串(未使用,但后续可以用来增强提示信息，比如显示参数列表)
      * @param startLineIndex 包含 Mixin 名称的起始行号/位置
@@ -404,41 +497,40 @@ class processor {
      * @returns key 是 Mixin 名字，value 是注释内容
      */
     globalSearch(): Record<string, string[] | undefined> | undefined {
-    const a = this.document.lineCount;
-    const util = new utils(this.document);
-    const udispatcher = new strategySplitter(util,config.troubleshootingMode);
-    let b = [];
-    // console.log(a);
-    for(let i = 0 ; i < a ; i++ ) {
-        const z = udispatcher.trigger({line:i});
-        if(z){b.push(i);}
-    }
-    // console.log(b);
-    if (!b){return undefined;}
-    let d:number[] = [];    
-    b.forEach(input => {
-        const output = util.validateMixin(input);
-        if (output) {d.push(input);}
-    });
-    if (!d){return undefined;}
-    console.log(d);
-    const map: Record<string, string[] | undefined> = {};
-    const Toolkit = new processor(this.document);
-    d.forEach(e => {
-        const lineText = this.document.lineAt(e).text;
-        const match = lineText.match(/^\.?([a-zA-Z0-9_-]+)\s*\(/);
-        const key = match ? match[1] : lineText.trim();
-        const val = Toolkit.getDocCommentAbove(e);
-        if(val){
-            if (!map[key]) {
-                map[key] = [val];
-            } else {
-                map[key].push(val);
-            }
+        const a = this.document.lineCount;
+        const util = new utils(this.document);
+        const udispatcher = new strategySplitter(util, advancedConfig.troubleshootingMode);
+        let b = [];
+        // console.log(a);
+        for (let i = 0; i < a; i++) {
+            const z = udispatcher.trigger({ line: i });
+            if (z) { b.push(i); }
         }
-    });
-    console.log(map);
-    return map;
+        // console.log(b);
+        if (!b) { return undefined; }
+        let d: number[] = [];
+        b.forEach(input => {
+            const output = util.validateMixin(input);
+            if (output) { d.push(input); }
+        });
+        if (!d) { return undefined; }
+        console.log(d);
+        const map: Record<string, string[] | undefined> = {};
+        d.forEach(e => {
+            const lineText = this.document.lineAt(e).text;
+            const match = lineText.match(/^\.?([a-zA-Z0-9_-]+)\s*\(/);
+            const key = match ? match[1] : lineText.trim();
+            const val = this.getDocCommentAbove(e);
+            if (val) {
+                if (!map[key]) {
+                    map[key] = [val];
+                } else {
+                    map[key].push(val);
+                }
+            }
+        });
+        console.log(map);
+        return map;
     }
     /**
      * @description 将杂乱的输入源清洗并融合...
@@ -451,34 +543,34 @@ class processor {
      * @example
      * const md = normalizeHoverContent({position:a,currentMode:1,inputtext2:b})
      */
-    normalizeHoverContent(input:{
-        position:vscode.Position,
-        currentMode:string,
-        inputtext1?:string | null,
-        inputtext2?:string[] | undefined
-    }):vscode.Hover {
+    normalizeHoverContent(input: {
+        position: vscode.Position,
+        currentMode: string,
+        inputtext1?: string | null,
+        inputtext2?: string[] | undefined
+    }): vscode.Hover {
         let txt = '';
         const consttxt = '貌似没有写备注哦';
         if (input.currentMode === '2') {
             if (input.inputtext2 === undefined) {
-            txt = consttxt;
+                txt = consttxt;
             } else if (input.inputtext2 && input.inputtext2.length === 1) {
                 txt = input.inputtext2[0];
             } else if (input.inputtext2 && input.inputtext2.length > 1) {
                 let count = 1;
-                for(const item of input.inputtext2) {
-                    if (txt !=='') {
+                for (const item of input.inputtext2) {
+                    if (txt !== '') {
                         txt += '\n\n';
                     }
                     txt += `[这是同名的第 ${count++} 个注释]\n${item}`;
                 }
-            } 
+            }
         } else if (input.currentMode === '1') {
             if (input.inputtext1 === null) {
                 txt = consttxt;
             } else if (input.inputtext1) {
                 txt = input.inputtext1;
-            }             
+            }
         }
         //console.log('📝 当前注释:', txt);
         // 1. 创建 Markdown 内容对象
@@ -488,7 +580,7 @@ class processor {
         // 3. 将纯文本转换为 Markdown 格式
         // 使用 code block (```) 包裹可以保留注释中的缩进和换行，看起来更整齐
         // 也可以直接使用 appendText(commentText)
-        hoverContent.appendCodeblock(txt,'less');
+        hoverContent.appendCodeblock(txt, 'less');
         const range = this.document.lineAt(input.position.line).range;
         // 4. 创建 Hover 实例
         // 第一个参数是内容，第二个参数是显示的矩形范围（决定鼠标放哪里才显示）
@@ -503,17 +595,17 @@ class searchExecutor {
     private document: vscode.TextDocument;
     constructor(
         document: vscode.TextDocument,
-    ){
+    ) {
         this.document = document;
     }
-    handleDocumentUpdate(source:string) {
+    handleDocumentUpdate(source: string) {
         try {
             const editor = vscode.window.activeTextEditor;
-            if (!editor) {return;}
+            if (!editor) { return; }
             let b = '';
-            if (source === 'switch') {b = this.document.languageId;}
-            else if (source === 'open') {b = editor.document.languageId;}
-            if (!['less','css','scss'].includes(b)) {return;}
+            if (source === 'switch') { b = this.document.languageId; }
+            else if (source === 'open') { b = editor.document.languageId; }
+            if (!['less', 'css', 'scss'].includes(b)) { return; }
             let docId = '';
             let doc: vscode.TextDocument = this.document;
             if (source === 'switch') {
@@ -529,8 +621,8 @@ class searchExecutor {
             const Toolkit = new processor(doc);
             const map = Toolkit.globalSearch();
             // const map = globalSearch(doc);
-            if(map) {lookup.set(docId,map);}
-        } catch(error) {console.error("错误堆栈",error);}
+            if (map) { lookup.set(docId, map); }
+        } catch (error) { console.error("错误堆栈", error); }
     }
     /** 核心业务逻辑：非map的函数逻辑
      *  实时计算当前鼠标所在位置是否是 Mixin 调用，如果是则找到对应的定义行并提取注释内容
@@ -553,7 +645,7 @@ class searchExecutor {
                 const definitionLineIndex = toolkit.findMixinDefinition(wordText, position.line);
                 if (definitionLineIndex !== undefined) {
                     const commenttext = toolkit.getDocCommentAbove(definitionLineIndex);
-                    const commentContent = toolkit.normalizeHoverContent({position:position,currentMode:'1',inputtext1:commenttext});
+                    const commentContent = toolkit.normalizeHoverContent({ position: position, currentMode: '1', inputtext1: commenttext });
                     return commentContent;
                 } else {
                     console.log(`❌ 未找到该 Mixin 的定义`);
@@ -562,11 +654,11 @@ class searchExecutor {
             }
             // 如果不是 Mixin（比如只是普通的 .class），什么都不做
             return undefined;
-        } catch(error) {
-            console.error("错误堆栈",error);
+        } catch (error) {
+            console.error("错误堆栈", error);
         }
     }
-    map(position: vscode.Position):vscode.Hover | undefined {
+    map(position: vscode.Position): vscode.Hover | undefined {
         /** 
          * Phase 1-1 ID ↘
          *   Phase 2-1 set 方式 val ↘
@@ -575,7 +667,7 @@ class searchExecutor {
          *   Phase 2-2 Phase 3的 key
          * Phase 1-2 ID
          */
-        const toolkit = new processor(this.document);   
+        const toolkit = new processor(this.document);
         const phase = toolkit.mixinProbabilityScreening(position.line);
         if (phase) {
             const lineText = this.document.lineAt(position.line).text;
@@ -584,9 +676,9 @@ class searchExecutor {
             if (key) {
                 const docId = this.document.uri.fsPath;
                 const phaseI = lookup.get(docId);// Phase 1
-                if(phaseI) {
+                if (phaseI) {
                     const phaseII = phaseI[key];//Phase 2
-                    const phaseIII = toolkit.normalizeHoverContent({position:position,currentMode:'2',inputtext2:phaseII});
+                    const phaseIII = toolkit.normalizeHoverContent({ position: position, currentMode: '2', inputtext2: phaseII });
                     return phaseIII;//Phase 3
                 }
             }
@@ -610,17 +702,17 @@ class searchExecutor {
  *   统一入口函数。
  *   ⚠️ 【高危操作区】在此处完成数据包的拆解与参数映射。
  */
-class dispatcher{
-    private executionGoals:searchExecutor;
-    private currentMode:string;
+class dispatcher {
+    private executionGoals: searchExecutor;
+    private currentMode: string;
     constructor(
         executionGoals: searchExecutor,
-        initialMode:string,
-    ){
+        initialMode: string,
+    ) {
         this.executionGoals = executionGoals;
         this.currentMode = initialMode;
     }
-    trigger(context:taskConstext):undefined | vscode.Hover {
+    trigger(context: taskConstext): undefined | vscode.Hover {
         // ==========================================
         // ⚠️ 【高危警告 / HIGH RISK WARNING】 ⚠️
         // ==========================================
@@ -630,9 +722,9 @@ class dispatcher{
         //    会导致耦合度极高，一旦 Context 结构变更，所有底层逻辑都会崩溃。
         // ==========================================
         const taskMap = {
-            'mapDisposable':(ctx:taskConstext) => {
+            'mapDisposable': (ctx: taskConstext) => {
                 // 在这里拆包：只取 source
-                if(ctx.source !== undefined) {
+                if (ctx.source !== undefined) {
                     // ✅ 正确：传递明确的 string 参数
                     this.executionGoals.handleDocumentUpdate(ctx.source);
                     return undefined;
@@ -641,8 +733,8 @@ class dispatcher{
                     return;
                 }
             },
-            'realtime': (ctx:taskConstext) => {
-                if(ctx.position !== undefined) {
+            'realtime': (ctx: taskConstext) => {
+                if (ctx.position !== undefined) {
                     const a = this.executionGoals.startupfunction(ctx.position);
                     return a;
                 } else {
@@ -650,15 +742,15 @@ class dispatcher{
                     return;
                 }
             },
-            'map': (ctx:taskConstext) => {
-                if(ctx.position !== undefined) {
+            'map': (ctx: taskConstext) => {
+                if (ctx.position !== undefined) {
                     const a = this.executionGoals.map(ctx.position);
                     return a;
                 } else {
                     console.log("⚠️ Map模式缺少必要参数: position");
                     return;
                 }
-            }, 
+            },
         };
         const task = taskMap[this.currentMode as keyof typeof taskMap];
         if (task) {
@@ -668,30 +760,4 @@ class dispatcher{
         return undefined;
     }
 }
-/**
- * @interface TaskContext
- * @description 【通用上下文数据包】用于在系统各层级间传递数据的标准化容器。
- *              所有的输入参数在进入 trigger() 之前，必须按照此结构进行组装。
- *
- * @packing_rules [打包准则 / Packing Protocol]
- * 1. **单一入口原则**：禁止向 trigger 传递零散参数（如 doc, line），必须在调用前封装为此对象。
- * 2. **字段职责分离**：
- *    - source: 专用于 map 模式，承载文档全文内容。
- *    - position: 专用于 realtime 模式，承载光标位置信息。
- * 3. **防御性打包**：如果不确定某个字段是否有值，请显式传入 undefined，不要省略键名。
- *
- * @property {string} [source] - [Map模式专用] 区分哪个监听器打开的
- * @property {vscode.Position} [position] - [Realtime模式专用] VS Code 原生位置对象。
- */
-interface taskConstext {
-    source?:string;
-    position?: vscode.Position;
-    line?:number;
-}
-interface mixinConfig {
-    searchMode:string,
-    troubleshootingMode:string,
-    syncMapOnOpen:boolean,
-    syncMapOnSave:boolean,
-}
-export function deactivate() {}
+export function deactivate() { }
