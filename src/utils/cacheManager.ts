@@ -1,0 +1,170 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
+import * as vscode from "vscode";
+interface CacheMetadata {
+    docId: string;                      // 文件路径
+    timestamp: number;                  // 缓存生成时间    
+    version: string;                    // 缓存格式版本
+}
+
+interface CacheEntry {
+    data: Record<string, any>;
+    metadata: CacheMetadata;
+}
+
+export class CacheManager {
+    private cacheDir: string;
+
+    constructor(context: vscode.ExtensionContext) {
+        // 使用 VS Code 的持久化存储目录
+        this.cacheDir = path.join(context.globalStorageUri.fsPath, 'mixin-cache');
+        this.ensureCacheDir();
+    }
+    // 创建文件
+    private ensureCacheDir() {
+        if (!fs.existsSync(this.cacheDir)) {
+            fs.mkdirSync(this.cacheDir, { recursive: true });
+        }
+    }
+    
+    /**
+     * 生成缓存文件路径
+     * docId (文件路径) -> 安全的文件名
+     */
+    private getCachePath(docId: string): string {
+        const hash = crypto.createHash('md5').update(docId).digest('hex');
+        return path.join(this.cacheDir, `${hash}.json`);
+    }
+    /**
+     * 获取当前日期的 YYYYMMDD 格式字符串
+     * 例如: 20260619
+     */
+    private getDateString(): string {
+        const d = new Date();
+        // padStart(2, '0') 确保月份和日期是个位数时前面补零 (比如 6月 -> "06")
+        return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+    };
+    /**
+     * 读取缓存 (如果有效)
+     * @returns 缓存数据或 null (缓存已失效)
+     */
+    public readCache(
+        docId: string,
+    ): Record<string, any> | undefined {
+        try {
+            const cachePath = this.getCachePath(docId);
+
+            // 1. 检查缓存文件是否存在
+            if (!fs.existsSync(cachePath)) {
+                console.log(`❌ 缓存不存在: ${docId}`);
+                return undefined;
+            }
+
+            // 2. 读取并解析缓存
+            const cacheContent = fs.readFileSync(cachePath, 'utf-8');
+            const cacheEntry: CacheEntry = JSON.parse(cacheContent);
+
+            // 4. 缓存有效 ✅
+            console.log(`✅ 缓存命中: 版本号${cacheEntry.metadata.version}`);
+            return cacheEntry.data;
+
+        } catch (error) {
+            console.error(`缓存读取失败: ${error}`);
+            return undefined;
+        }
+    }
+
+    /**
+     * 写入缓存
+     */
+    public writeCache(
+        docId: string,
+        mapData: Record<string, any>,
+    ): boolean {
+        try {
+            const cachePath = this.getCachePath(docId);
+
+            const cacheEntry: CacheEntry = {
+                data: mapData,
+                metadata: {
+                    docId: docId,
+                    timestamp: Date.now(),
+                    version: 
+                }
+            };
+
+            fs.writeFileSync(
+                // 文件路径哈希
+                cachePath,
+                JSON.stringify(cacheEntry, null, 2),
+                'utf-8'
+            );
+
+            console.log(`💾 缓存已保存: ${docId}`);
+            return true;
+
+        } catch (error) {
+            console.error(`缓存写入失败: ${error}`);
+            return false;
+        }
+    }
+
+    /**
+     * 清空单个缓存
+     */
+    public invalidateCache(docId: string): void {
+        try {
+            const cachePath = this.getCachePath(docId);
+            if (fs.existsSync(cachePath)) {
+                fs.unlinkSync(cachePath);
+                console.log(`缓存已清除: ${docId}`);
+            }
+        } catch (error) {
+            console.error(`缓存清除失败: ${error}`);
+        }
+    }
+
+    /**
+     * 清空所有缓存 (用户手动刷新时)
+     */
+    public clearAllCache(): void {
+        try {
+            if (fs.existsSync(this.cacheDir)) {
+                fs.rmSync(this.cacheDir, { recursive: true, force: true });
+                this.ensureCacheDir();
+                console.log(`🗑️ 所有缓存已清除`);
+            }
+        } catch (error) {
+            console.error(`批量清除缓存失败: ${error}`);
+        }
+    }
+
+    /**
+     * 获取缓存统计信息 (用于调试)
+     */
+    public getCacheStats(): { totalSize: number; fileCount: number } {
+        try {
+            if (!fs.existsSync(this.cacheDir)) {
+                return { totalSize: 0, fileCount: 0 };
+            }
+
+            const files = fs.readdirSync(this.cacheDir);
+            let totalSize = 0;
+
+            files.forEach(file => {
+                const filePath = path.join(this.cacheDir, file);
+                const stats = fs.statSync(filePath);
+                totalSize += stats.size;
+            });
+
+            return {
+                totalSize,
+                fileCount: files.length
+            };
+        } catch (error) {
+            console.error(`获取缓存统计失败: ${error}`);
+            return { totalSize: 0, fileCount: 0 };
+        }
+    }
+}

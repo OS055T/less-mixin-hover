@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import { massageUtils } from "./utils/logger";
+import { CacheManager} from "./utils/cacheManager";
+import { error } from "console";
 const lookup = new Map<string, Record<string, commentTextoutput[] | undefined>>();
 let featurePack: vscode.Disposable | undefined;
 /**
@@ -95,27 +97,29 @@ export function activate(context: vscode.ExtensionContext) {
 }
 class initialize {
     private context: vscode.ExtensionContext;
+    private cacheManager: CacheManager;  // 新增
     constructor(
         context: vscode.ExtensionContext,
     ) {
         this.context = context;
+        this.cacheManager = new CacheManager(context);  // 实例化
     }
     trigger() {
-        console.log('NixinHelper 正在激活...');
+        console.log('[调试]NixinHelper 正在激活...');
         if (!vscode.workspace.isTrusted) {
-            console.warn('⚠️ 当前工作区未受信任,MixinHelper 将保持静默状态以确保安全。');
+            console.warn('[调试][error] 当前工作区未受信任,MixinHelper 将保持静默状态以确保安全。');
             return;
         }
-        console.log("环境就绪,开始同步 MAP...");
+        console.log("[调试]环境就绪,开始同步 MAP...");
         this.updateConfig();
         this.updateConfigBeta();
-        console.log(`基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
-        console.log(`高级设置 最大百分比: ${advancedConfig.maxPercentage},最大Mixin数:${advancedConfig.maxMixinCount},排查模式:${advancedConfig.troubleshootingMode}`);
+        console.log(`[调试]基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
+        console.log(`[调试]高级设置 最大百分比: ${advancedConfig.maxPercentage},最大Mixin数:${advancedConfig.maxMixinCount},排查模式:${advancedConfig.troubleshootingMode}`);
         //设置更改
         this.context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration((e) => {
                 if (!e.affectsConfiguration("MixinHelper")) { return; }
-                console.log("触发IV设置更改");
+                console.log("[调试]触发IV设置更改");
                 if (e.affectsConfiguration("MixinHelper.advancedSettings")) {
                     this.updateConfigBeta();
                 } else {
@@ -126,7 +130,7 @@ class initialize {
                             this.updateConfig(key);
                             this.updateSubscriptions();
                             const configkey = config[key];
-                            console.log(`配置项 ${key} 已变更，当前值为: ${configkey}`);
+                            console.log(`[调试]配置项 ${key} 已变更，当前值为: ${configkey}`);
                             break;
                         }
                     }
@@ -145,7 +149,9 @@ class initialize {
                 const editor = vscode.window.activeTextEditor;
                 if (!editor) { return; }
                 try {
-                    await new searchExecutor(editor.document).handleDocumentUpdate("switch");
+                    // const docId = editor.document.uri.fsPath;
+                    // this.cacheManager.invalidateCache(docId);
+                    await new searchExecutor(editor.document).handleDocumentUpdate("switch",this.cacheManager);
                     massageUtils.showInfo("加载完成");
                     massageUtils.logObejct("当前缓存内容", lookup);
                 } catch (error) {
@@ -164,22 +170,21 @@ class initialize {
         //map订阅监听器    
         if (config.searchMode === "map") {
             const handleMapTrigger = (doc: vscode.TextDocument, sourceType: string = "switch") => {
-                const a = new dispatcher(new searchExecutor(doc), "mapDisposable");
-                a.trigger({ source: sourceType });
+                new searchExecutor(doc).handleDocumentUpdate(sourceType,this.cacheManager);
             };
             //触发I打开文件
             if (config.syncMapOnOpen) {
                 disposable.push(vscode.workspace.onDidOpenTextDocument((doc) => {
                     if (config.searchMode !== "map") { return; };
                     handleMapTrigger(doc, "open");
-                    console.log("触发I打开文件");
+                    console.log("[调试]触发I打开文件");
                 }));
             }
             //触发II保存文件
             if (config.syncMapOnSave) {
                 disposable.push(vscode.workspace.onDidSaveTextDocument((doc) => {
                     handleMapTrigger(doc);
-                    console.log("触发II保存文件");
+                    console.log("[调试]触发II保存文件");
                 }));
             }
             //触发III切换文件
@@ -190,13 +195,13 @@ class initialize {
                         const path = editor.document.uri.fsPath;
                         if (!lookup.has(path)) {
                             handleMapTrigger(editor.document);
-                            console.log("触发III切换文件");
+                            console.log("[调试]触发III切换文件");
                         }
                     }
                 }));
             }
         }
-        console.log(`MAP准备订阅${disposable.length}个`);
+        console.log(`[调试]MAP准备订阅${disposable.length}个`);
         if (disposable.length > 0) {
             // 3. 存入临时池（用于下次更新时销毁）
             featurePack = vscode.Disposable.from(...disposable);
@@ -241,12 +246,12 @@ class initialize {
         };
         if (target) {
             // --- 场景 A：指定了目标（通常是配置变更监听触发） ---
-            console.log(`[Beta Update] 正在更新单项: ${String(target)}`);
+            console.log(`[调试] 正在更新单项: ${String(target)}`);
             processKey(target);
         } else {
             // --- 场景 B：未指定目标（通常是插件启动时的初始化） ---
             // console.log("[Beta Init] 正在初始化所有高级配置...");
-            console.log("[调试]VS Code 返回的原始配置对象:", JSON.stringify(rawAdvancedObj, null, 2));
+            console.log("[调试] VS Code 返回的原始配置对象:", JSON.stringify(rawAdvancedObj, null, 2));
             for (const key of Object.keys(DEFAULT_ADVANCED_CONFIG_MAP) as Array<keyof typeof DEFAULT_ADVANCED_CONFIG_MAP>) {
                 processKey(key);
             }
@@ -384,7 +389,7 @@ class strategySplitter {
                     const a = this.executionGoals.CoarseFilterMS(ctx.line);
                     return a;
                 } else {
-                    console.log("⚠️ losse模式缺少必要参数: line");
+                    console.log("[调试][error] losse模式缺少必要参数: line");
                     return;
                 }
             },
@@ -393,7 +398,7 @@ class strategySplitter {
                     const a = this.executionGoals.CoarseFilterML(ctx.line);
                     return a;
                 } else {
-                    console.log("⚠️ losse模式缺少必要参数: line");
+                    console.log("[调试][error] losse模式缺少必要参数: line");
                     return;
                 }
             },
@@ -402,7 +407,7 @@ class strategySplitter {
         if (task) {
             return task(context);
         }
-        console.log("❌ 未知模式: " + this.currentMode);
+        console.log("[调试][error] 未知模式: " + this.currentMode);
         return;
     }
 }
@@ -456,7 +461,7 @@ class processor {
         const PhaseIV = PhaseIII.replace(/^[.#]/, '');
         if (cssFunctions.includes(PhaseIV)) { return false; }
         // 6. 通过初筛
-        console.log(`可能是 Mixin: ${PhaseIII}`);
+        console.log(`[调试] 可能是 Mixin: ${PhaseIII}`);
         return true;
     }
     /** 辅助函数：向上查找 Mixin 的定义,返回所在的行号
@@ -629,7 +634,7 @@ class processor {
      * @returns {vscode.Hover} - 返回最后组装好的内容
      */
     createHoverObject(input: annotationProcessingRequest): vscode.Hover {
-        // console.log('📝 当前注释:', input.docText);
+        // console.log('[调试] 当前注释:', input.docText);
         const phaseI = utils.porcessRawDocs(input.annotationContext);
         const phaseII = utils.createStyledHover(input.mixinName, phaseI.text, phaseI.example);
         const range = this.document.lineAt(input.position.line).range;
@@ -644,6 +649,7 @@ class processor {
  * 包工头，负责把大目标拆成几个小步骤，按顺序挨个调用底层任务，并兜底返回最终结果。 */
 class searchExecutor {
     private document: vscode.TextDocument;
+    
     constructor(
         document: vscode.TextDocument,
     ) {
@@ -710,14 +716,14 @@ class searchExecutor {
                 const commentContent = toolkit.createHoverObject(APR);
                 return commentContent;
             } else {
-                console.log(`❌ 未找到该 Mixin 的定义`);
+                console.log(`[调试][error] 未找到该 Mixin 的定义`);
                 return undefined;
             }
         } catch (error) {
             console.error("错误堆栈", error);
         }
     }
-    handleDocumentUpdate(source: string) {
+    handleDocumentUpdate(source: string , cacheManager:CacheManager) {
         try {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { return; }
@@ -736,11 +742,18 @@ class searchExecutor {
                 doc = editor.document;
                 docId = editor.document.fileName;
             }
-            // 更新 Map
-            const Toolkit = new processor(doc);
-            const map = Toolkit.globalSearch();
-            // const map = globalSearch(doc);
-            if (map) { lookup.set(docId, map); }
+            // 0.0.3.4? 还是 0.0.4?新增 先尝试读取缓存
+            let map = cacheManager.readCache(docId);
+            if (!map) {
+                // 更新 Map
+                console.log(`[调试] 执行全量扫描...`);
+                const Toolkit = new processor(doc);
+                map = Toolkit.globalSearch(); 
+                if (map) { 
+                    lookup.set(docId, map);
+                    cacheManager.writeCache(docId, map);
+                }
+            }
         } catch (error) { console.error("错误堆栈", error); }
     }
 }
@@ -781,23 +794,12 @@ class dispatcher {
         //    会导致耦合度极高，一旦 Context 结构变更，所有底层逻辑都会崩溃。
         // ==========================================
         const taskMap = {
-            'mapDisposable': (ctx: taskConstext) => {
-                // 在这里拆包：只取 source
-                if (ctx.source !== undefined) {
-                    // ✅ 正确：传递明确的 string 参数
-                    this.executionGoals.handleDocumentUpdate(ctx.source);
-                    return undefined;
-                } else {
-                    console.log("⚠️ Map初始化缺少必要参数: source");
-                    return;
-                }
-            },
             'realtime': (ctx: taskConstext) => {
                 if (ctx.position !== undefined) {
                     const a = this.executionGoals.startupfunction(ctx.position);
                     return a;
                 } else {
-                    console.log("⚠️ Realtime模式缺少必要参数: position");
+                    console.log("[调试][error] Realtime模式缺少必要参数: position");
                     return;
                 }
             },
@@ -806,7 +808,7 @@ class dispatcher {
                     const a = this.executionGoals.map(ctx.position);
                     return a;
                 } else {
-                    console.log("⚠️ Map模式缺少必要参数: position");
+                    console.log("[调试][error] Map模式缺少必要参数: position");
                     return;
                 }
             },
@@ -815,7 +817,7 @@ class dispatcher {
         if (task) {
             return task(context);
         }
-        console.log("❌ 未知模式: " + this.currentMode);
+        console.log("[调试][error] 未知模式: " + this.currentMode);
         return undefined;
     }
 }
