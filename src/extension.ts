@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { massageUtils } from "./utils/logger";
-import { CacheManager} from "./utils/cacheManager";
+import { CacheManager } from "./utils/cacheManager";
 import { error } from "console";
 const lookup = new Map<string, Record<string, commentTextoutput[] | undefined>>();
 let featurePack: vscode.Disposable | undefined;
@@ -80,6 +80,16 @@ interface annotationProcessingRequest {
     mixinName: string,
     annotationContext: annotationContext,
 }
+function log(target: any, key: string, descriptor: PropertyDescriptor) {
+    const a = descriptor.value;
+    descriptor.value = function (...atgs: any[]) {
+        console.log(`[调试][log] 调用方法${key},参数:`, atgs);
+        const b = a.apply(this, atgs);
+        console.log(`[调试][log] 返回`, b);
+        return b;
+    };
+    return descriptor;
+}
 //================= 1. 关键函数入口 ================= //
 export function activate(context: vscode.ExtensionContext) {
     const initialization = new initialize(context);
@@ -105,16 +115,16 @@ class initialize {
         this.cacheManager = new CacheManager(context);  // 实例化
     }
     trigger() {
-        console.log('[调试]NixinHelper 正在激活...');
+        console.log('[调试] NixinHelper 正在激活...');
         if (!vscode.workspace.isTrusted) {
             console.warn('[调试][error] 当前工作区未受信任,MixinHelper 将保持静默状态以确保安全。');
             return;
         }
-        console.log("[调试]环境就绪,开始同步 MAP...");
+        console.log("[调试] 环境就绪,开始同步 MAP...");
         this.updateConfig();
         this.updateConfigBeta();
-        console.log(`[调试]基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
-        console.log(`[调试]高级设置 最大百分比: ${advancedConfig.maxPercentage},最大Mixin数:${advancedConfig.maxMixinCount},排查模式:${advancedConfig.troubleshootingMode}`);
+        console.log(`[调试] 基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
+        console.log(`[调试] 高级设置 最大百分比: ${advancedConfig.maxPercentage},最大Mixin数:${advancedConfig.maxMixinCount},排查模式:${advancedConfig.troubleshootingMode}`);
         //设置更改
         this.context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration((e) => {
@@ -151,7 +161,7 @@ class initialize {
                 try {
                     const docId = editor.document.uri.fsPath;
                     this.cacheManager.invalidateCache(docId);
-                    await new searchExecutor(editor.document).handleDocumentUpdate("switch",this.cacheManager);
+                    await new searchExecutor(editor.document).handleDocumentUpdate("switch", this.cacheManager);
                     massageUtils.showInfo("加载完成");
                     massageUtils.logObejct("当前缓存内容", lookup);
                 } catch (error) {
@@ -169,8 +179,8 @@ class initialize {
                         massageUtils.showInfo("当前文件缓存已加载");
                         massageUtils.logObejct("当前文件缓存", lookup);
                     } else {
-                        await new searchExecutor(editor.document).handleDocumentUpdate("switch",this.cacheManager);
-                        massageUtils.showInfo("当前文件好像没有缓存? 已启用刷新Map缓存");                       
+                        await new searchExecutor(editor.document).handleDocumentUpdate("switch", this.cacheManager);
+                        massageUtils.showInfo("当前文件好像没有缓存? 已启用刷新Map缓存");
                     }
                 } catch (error) {
                     massageUtils.showInfo(`${error}`);
@@ -193,7 +203,7 @@ class initialize {
         //map订阅监听器    
         if (config.searchMode === "map") {
             const handleMapTrigger = (doc: vscode.TextDocument, sourceType: string = "switch") => {
-                new searchExecutor(doc).handleDocumentUpdate(sourceType,this.cacheManager);
+                new searchExecutor(doc).handleDocumentUpdate(sourceType, this.cacheManager);
             };
             //触发I打开文件
             if (config.syncMapOnOpen) {
@@ -237,14 +247,14 @@ class initialize {
     private updateConfig<T extends keyof typeof DEFAULT_CONFIG_MAP>(
         target?: T,
     ) {
-        const configs = vscode.workspace.getConfiguration("MixinHelper");         
+        const configs = vscode.workspace.getConfiguration("MixinHelper");
         const processKey = (key: keyof typeof DEFAULT_CONFIG_MAP) => {
             // 组装当前默认值
             const defaultVal = DEFAULT_CONFIG_MAP[key];
             // 获取VS code对应的当前值
             const defaultValue = configs.get<mixinConfig[T]>(key, defaultVal as any);
             // 写入自身全局变量
-            (config as any)[key] = configs.get(key, defaultValue); 
+            (config as any)[key] = configs.get(key, defaultValue);
         };
         if (target) {
             processKey(target);
@@ -615,8 +625,8 @@ class processor {
         const utilspatcher = new strategySplitter(this.util, advancedConfig.troubleshootingMode);
         let phaseI = [];
         // console.log(a);
-        for (let i = 0 , foundCount = 0; 
-            i < limit && (scanLimit === 0 || foundCount < scanLimit); 
+        for (let i = 0, foundCount = 0;
+            i < limit && (scanLimit === 0 || foundCount < scanLimit);
             i++
         ) {
             const phaseII = utilspatcher.trigger({ line: i });
@@ -674,12 +684,13 @@ class processor {
  * 包工头，负责把大目标拆成几个小步骤，按顺序挨个调用底层任务，并兜底返回最终结果。 */
 class searchExecutor {
     private document: vscode.TextDocument;
-    
+
     constructor(
         document: vscode.TextDocument,
     ) {
         this.document = document;
     }
+    @log
     map(position: vscode.Position): vscode.Hover | undefined {
         // PhaseI 1-1 ID ↘
         // PhaseII  2-1 set 方式 val ↘
@@ -737,7 +748,6 @@ class searchExecutor {
                         realtimetext: phaseI
                     }
                 };
-                // const phaseII = utils.porcessRawDocs({ currentMode: '1', inputtext1: phaseI });
                 const commentContent = toolkit.createHoverObject(APR);
                 return commentContent;
             } else {
@@ -748,7 +758,7 @@ class searchExecutor {
             console.error("错误堆栈", error);
         }
     }
-    handleDocumentUpdate(source: string , cacheManager:CacheManager) {
+    handleDocumentUpdate(source: string, cacheManager: CacheManager) {
         try {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { return; }
@@ -756,14 +766,12 @@ class searchExecutor {
             if (source === 'switch') { b = this.document.languageId; }
             else if (source === 'open') { b = editor.document.languageId; }
             if (!['less', 'css', 'scss'].includes(b)) { return; }
-            let docId = '';
             let doc: vscode.TextDocument = this.document;
+            let docId = '';
             if (source === 'switch') {
-                b = this.document.languageId;
                 doc = this.document;
                 docId = this.document.uri.fsPath;
             } else if (source === 'open') {
-                b = editor.document.languageId;
                 doc = editor.document;
                 docId = editor.document.fileName;
             }
@@ -773,8 +781,8 @@ class searchExecutor {
                 // 更新 Map
                 console.log(`[调试] 执行全量扫描...`);
                 const Toolkit = new processor(doc);
-                map = Toolkit.globalSearch(); 
-                if (map) { 
+                map = Toolkit.globalSearch();
+                if (map) {
                     lookup.set(docId, map);
                     cacheManager.writeCache(docId, map);
                 }
