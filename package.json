@@ -78,7 +78,7 @@
             "【仅日志】记录日志到后台，但不自动弹出 Output 面板（推荐）",
             "【全关】完全静默，禁用所有通知和日志输出"
           ],
-          "description": "控制 F1/ctrl shift p 的通知与日志显示行为"
+          "description": "控制插件的通知与日志显示行为"
         },
         "MixinHelper.advancedSettings": {
           "type": "object",
