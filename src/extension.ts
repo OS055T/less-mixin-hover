@@ -70,7 +70,7 @@ interface commentTextoutput {
 }
 interface annotationContext {
     currentMode: string,
-    realtimetext?: string | null,
+    realtimetext?: commentTextoutput | null,
     mapText?: commentTextoutput[] | undefined
 }
 interface annotationProcessingRequest {
@@ -147,7 +147,7 @@ class initialize {
                 try {
                     await new searchExecutor(editor.document).handleDocumentUpdate("switch");
                     massageUtils.showInfo("加载完成");
-                    massageUtils.logOdjct("当前缓存内容", lookup);
+                    massageUtils.logObejct("当前缓存内容", lookup);
                 } catch (error) {
                     massageUtils.showInfo(`${error}`);
                 }
@@ -312,7 +312,7 @@ class utils {
             .replace(/@example/g, '*@Example:*\n\n');             // 强调 Example
         const phaseII: commentTextoutput = { text: phaseI, example: example?.[1] };
         return phaseII;
-    }    
+    }
     static porcessRawDocs(input: annotationContext): commentTextoutput {
         let text = '';
         let example: undefined | string = '';
@@ -327,18 +327,19 @@ class utils {
                 let count = 1;
                 let countb = 1;
                 for (const item of input.mapText) {
-                    if (text !== '') {text += '\n\n';}
+                    if (text !== '') { text += '\n\n'; }
                     text += `### [这是同名的第 ${count++} 个注释]\n\n${item.text}`;
                 }
                 for (const item of input.mapText) {
-                    if (item.example) {example += `[示例${countb++}]${item.example}`;}
+                    if (item.example) { example += `[示例${countb++}]${item.example}\n`; }
                 }
             }
         } else if (input.currentMode === '1') {
             if (input.realtimetext === null) {
                 text = consttxt;
             } else if (input.realtimetext) {
-                text = input.realtimetext;
+                text = input.realtimetext.text;
+                example = input.realtimetext.example;
             }
         }
         const finalText: commentTextoutput = {
@@ -580,27 +581,25 @@ class processor {
         const limit = percent !== 0
             ? Math.floor(a * (percent / 100))
             : a;
+        const scanLimit = advancedConfig.maxMixinCount;
         const utilspatcher = new strategySplitter(this.util, advancedConfig.troubleshootingMode);
         let phaseI = [];
         // console.log(a);
-        for (let i = 0; i < limit; i++) {
-            const z = utilspatcher.trigger({ line: i });
-            if (z) { phaseI.push(i); }
+        for (let i = 0 , foundCount = 0; 
+            i < limit && (scanLimit === 0 || foundCount < scanLimit); 
+            i++
+        ) {
+            const phaseII = utilspatcher.trigger({ line: i });
+            if (!phaseII) { continue; }
+            const output = this.util.validateMixin(i);
+            if (output) {
+                phaseI.push(i);
+                foundCount++;
+            }
         }
-        // console.log(b);
-        if (!phaseI) { return undefined; }
-        let phaseII: number[] = [];
-        phaseI.forEach(input => {
-            const output = this.util.validateMixin(input);
-            if (output) { phaseII.push(input); }
-        });
-        if (!phaseII) { return undefined; }
-        const phaseIII = advancedConfig.maxMixinCount > 0
-            ? phaseII.slice(0, advancedConfig.maxMixinCount)
-            : phaseII;
-        //console.log(phaseIII);
+        //console.log(phaseI);
         const map: Record<string, commentTextoutput[] | undefined> = {};
-        phaseIII.forEach(i => {
+        phaseI.forEach(i => {
             const lineText = this.document.lineAt(i).text;
             const match = lineText.match(/^\.?([a-zA-Z0-9_-]+)\s*\(/);
             const key = match ? match[1] : lineText.trim();
@@ -699,9 +698,17 @@ class searchExecutor {
             const definitionLineIndex = toolkit.findMixinDefinition(wordText, position.line);
             if (definitionLineIndex !== undefined) {
                 const phaseI = toolkit.getDocCommentAbove(definitionLineIndex);
+                const APR: annotationProcessingRequest = {
+                    position: position,
+                    mixinName: wordText,
+                    annotationContext: {
+                        currentMode: '1',
+                        realtimetext: phaseI
+                    }
+                };
                 // const phaseII = utils.porcessRawDocs({ currentMode: '1', inputtext1: phaseI });
-                // const commentContent = toolkit.createHoverObject({ position: position, docText: phaseII, mixinName: wordText });
-                // return commentContent;
+                const commentContent = toolkit.createHoverObject(APR);
+                return commentContent;
             } else {
                 console.log(`❌ 未找到该 Mixin 的定义`);
                 return undefined;

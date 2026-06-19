@@ -14,7 +14,7 @@ export class massageUtils {
         if (data instanceof Set) {return Array.from(data);}
         return data;
     }
-    static logOdjct(label:string,data:any) {
+    static logObejct(label:string,data:any) {
         const configs = vscode.workspace.getConfiguration("MixinHelper");
         const mode = configs.get<string>("enableNotification","logSilently");
         if (mode !== "disableNotifications" && mode !== "popupWithoutLog") {
