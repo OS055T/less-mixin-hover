@@ -4,8 +4,8 @@ import * as crypto from 'crypto';
 import * as vscode from "vscode";
 interface CacheMetadata {
     docId: string;                      // 文件路径
-    timestamp: number;                  // 缓存生成时间    
-    version: string;                    // 缓存格式版本
+    timeStamp: number;                  // 缓存生成时间    
+    dateStamp: string;                    // 缓存格式版本
 }
 
 interface CacheEntry {
@@ -36,15 +36,26 @@ export class CacheManager {
         const hash = crypto.createHash('md5').update(docId).digest('hex');
         return path.join(this.cacheDir, `${hash}.json`);
     }
+
     /**
-     * 获取当前日期的 YYYYMMDD 格式字符串
-     * 例如: 20260619
+     * 获取 YYMMDDHHmm 格式的日期字符串
+     * 例如: 2606191342 (代表 2026年6月19日 13点42分)
      */
     private getDateString(): string {
         const d = new Date();
-        // padStart(2, '0') 确保月份和日期是个位数时前面补零 (比如 6月 -> "06")
-        return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-    };
+        // 取年份后两位
+        const year = String(d.getFullYear()).slice(-2);
+        // 月份+1，补零
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        // 日期，补零
+        const day = String(d.getDate()).padStart(2, '0');
+        // 小时，补零
+        const hour = String(d.getHours()).padStart(2, '0');
+        // 分钟，补零
+        const minute = String(d.getMinutes()).padStart(2, '0');
+        return `${year}${month}${day}${hour}${minute}`;
+    }
+
     /**
      * 读取缓存 (如果有效)
      * @returns 缓存数据或 null (缓存已失效)
@@ -57,7 +68,6 @@ export class CacheManager {
 
             // 1. 检查缓存文件是否存在
             if (!fs.existsSync(cachePath)) {
-                console.log(`❌ 缓存不存在: ${docId}`);
                 return undefined;
             }
 
@@ -66,7 +76,7 @@ export class CacheManager {
             const cacheEntry: CacheEntry = JSON.parse(cacheContent);
 
             // 4. 缓存有效 ✅
-            console.log(`✅ 缓存命中: 版本号${cacheEntry.metadata.version}`);
+            console.log(`✅ 缓存命中上次记录时间为${cacheEntry.metadata.dateStamp}`);
             return cacheEntry.data;
 
         } catch (error) {
@@ -89,8 +99,8 @@ export class CacheManager {
                 data: mapData,
                 metadata: {
                     docId: docId,
-                    timestamp: Date.now(),
-                    version: 
+                    timeStamp: Date.now(),
+                    dateStamp: this.getDateString()
                 }
             };
 

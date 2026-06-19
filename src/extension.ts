@@ -149,14 +149,37 @@ class initialize {
                 const editor = vscode.window.activeTextEditor;
                 if (!editor) { return; }
                 try {
-                    // const docId = editor.document.uri.fsPath;
-                    // this.cacheManager.invalidateCache(docId);
+                    const docId = editor.document.uri.fsPath;
+                    this.cacheManager.invalidateCache(docId);
                     await new searchExecutor(editor.document).handleDocumentUpdate("switch",this.cacheManager);
                     massageUtils.showInfo("加载完成");
                     massageUtils.logObejct("当前缓存内容", lookup);
                 } catch (error) {
                     massageUtils.showInfo(`${error}`);
                 }
+            }),
+            vscode.commands.registerCommand('less-mixin-hover.loadCurrentFileCache', async () => {
+                const editor = vscode.window.activeTextEditor;
+                if (!editor) { return; }
+                try {
+                    const docId = editor.document.uri.fsPath;
+                    const map = this.cacheManager.readCache(docId);
+                    if (map) {
+                        lookup.set(docId, map);
+                        massageUtils.showInfo("当前文件缓存已加载");
+                        massageUtils.logObejct("当前文件缓存", lookup);
+                    } else {
+                        await new searchExecutor(editor.document).handleDocumentUpdate("switch",this.cacheManager);
+                        massageUtils.showInfo("当前文件好像没有缓存? 已启用刷新Map缓存");                       
+                    }
+                } catch (error) {
+                    massageUtils.showInfo(`${error}`);
+                }
+            }),
+            vscode.commands.registerCommand("less-mixin-hover.clearAllCache", async () => {
+                this.cacheManager.clearAllCache();
+                lookup.clear();  // 同时清空内存
+                massageUtils.showInfo("✅ 所有缓存已清除");
             })
         );
         this.updateSubscriptions();
@@ -214,19 +237,21 @@ class initialize {
     private updateConfig<T extends keyof typeof DEFAULT_CONFIG_MAP>(
         target?: T,
     ) {
-        if (target) {
-            const configs = vscode.workspace.getConfiguration("MixinHelper");
+        const configs = vscode.workspace.getConfiguration("MixinHelper");         
+        const processKey = (key: keyof typeof DEFAULT_CONFIG_MAP) => {
             // 组装当前默认值
-            const defaultVal = DEFAULT_CONFIG_MAP[target];
+            const defaultVal = DEFAULT_CONFIG_MAP[key];
             // 获取VS code对应的当前值
-            const val = configs.get<mixinConfig[T]>(target, defaultVal);
-            // console.log("[调试]VS Code 返回的原始配置对象:", JSON.stringify(val, null, 2));
+            const defaultValue = configs.get<mixinConfig[T]>(key, defaultVal as any);
             // 写入自身全局变量
-            (config as any)[target] = configs.get(target, val);
+            (config as any)[key] = configs.get(key, defaultValue); 
+        };
+        if (target) {
+            processKey(target);
         } else {
             for (const key of Object.keys(DEFAULT_CONFIG_MAP) as Array<keyof typeof DEFAULT_CONFIG_MAP>) {
-                // 这里复用了上面的逻辑，或者直接调用 updateConfig(key)
-                this.updateConfig(key);
+                // 这里复用了上面的逻辑直接调用
+                processKey(key);
             }
         }
     }

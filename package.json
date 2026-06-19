@@ -17,8 +17,18 @@
     "commands": [
       {
         "command": "less-mixin-hover.refreshMapCache",
-        "title": "MixinHelper: 刷新 Map 缓存",
-        "category": "Less Mixin Hover"
+        "title": "刷新 Map 缓存",
+        "category": "MixinHelper"
+      },
+      {
+        "command": "less-mixin-hover.loadCurrentFileCache",
+        "title": "加载当前文件缓存",
+        "category": "MixinHelper"
+      },
+      {
+        "command": "less-mixin-hover.clearAllCache",
+        "title": "清空所有缓存",
+        "category": "MixinHelper"
       }
     ],
     "configuration": {
