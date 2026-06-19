@@ -11,6 +11,8 @@
     "lib": ["ES2019", "dom"], // ← 添加这一行
     "removeComments": true,
     "stripInternal": true,
-    "types": ["node"]
+    "types": ["node"],
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
   }
 }

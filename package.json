@@ -2,7 +2,7 @@
   "name": "less-mixin-hover",
   "displayName": "Less Mixin Hover",
   "description": "为 Less 文件中的 Mixin 调用提供悬停提示，自动显示其定义上方的文档注释，支持 Markdown 格式，提升代码可读性与开发效率。 ",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "engines": {
     "vscode": "^1.120.0"
   },
