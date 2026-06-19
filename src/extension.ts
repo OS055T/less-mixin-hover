@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import { massageUtils } from "./utils/logger";
 import { CacheManager } from "./utils/cacheManager";
-import { error } from "console";
 const lookup = new Map<string, Record<string, commentTextoutput[] | undefined>>();
 let featurePack: vscode.Disposable | undefined;
 /**
@@ -14,7 +13,7 @@ let config: mixinConfig = {
     searchMode: "map",
     syncMapOnOpen: true,
     syncMapOnSave: false,
-    syncMapOnFocus: true,
+    syncMapOnFocus: false,
 };
 let advancedConfig: advancedmixinConfig = {
     maxPercentage: 50,
@@ -26,7 +25,7 @@ const DEFAULT_CONFIG_MAP: mixinConfig = {
     searchMode: "map",
     syncMapOnOpen: true,
     syncMapOnSave: false,
-    syncMapOnFocus: true,
+    syncMapOnFocus: false,
 } as const;
 const DEFAULT_ADVANCED_CONFIG_MAP: advancedmixinConfig = {
     maxPercentage: 50,
