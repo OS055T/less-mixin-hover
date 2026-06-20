@@ -117,7 +117,7 @@
             }
           }
         },
-        "MixinHelper.Settings": {
+        "MixinHelper.userCustomComments": {
           "type": "object",
           "markdownDescription": "自定义你的快捷指令字典。\n\n- **左边 (Key)**：是你定义的触发暗号。建议以 `@` 开头（如 `@p`），这样既好记又不容易和代码里的标准注释冲突。\n- **右边 (Value)**：是一串转换规则。填入你想要的样式单词，用空格隔开即可。\n\n例如：`\"@p\": [\"bold\", \"code\"]`",
           "properties": {},
@@ -129,18 +129,22 @@
               "enum": [
                 "bold",
                 "italic",
+                "strikethrough",
+                "allBoldAndItalic",
                 "underline",
+                "quotingText",
                 "code",
-                "raw",
-                "strike"
+                "raw"
               ],
               "enumDescriptions": [
                 "将文本转换为 Markdown 加粗格式 (**text**)",
                 "将文本转换为 Markdown 斜体格式 (*text*)",
-                "将文本转换为 Markdown 下划线格式 (<u>text</u>)",
-                "将文本转换为行内代码格式 (`text`)",
-                "保持原始文本不变，不进行任何格式化",
-                "将文本转换为删除线格式 (~~text~~)"
+                "将文本转换为 Markdown 删除线格式 (~~text~~)",
+                "将文本转换为 Markdown 加粗+斜体格式 (***text***)",
+                "将文本转换为 Markdown 下划线格式 (<u>text</u>,<ins>text</ins>)",
+                "将文本转换为 Markdown 引用文本格式 (>text)",
+                "将文本转换为 Markdown 行内代码格式 (`text`)",
+                "保持原始文本不变，不进行任何格式化"
               ]
             }
           }

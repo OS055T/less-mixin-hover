@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
-import { CacheManager, messageUtils } from "./utils/index";
+import { CacheManager, messageUtils, userCustomObjArray } from "./utils/index";
+import { text } from "stream/consumers";
 const lookup = new Map<string, Record<string, commentTextoutput[] | undefined>>();
-let currentFileContext: Record<string, commentTextoutput[] | undefined> ;
+let currentFileContext: Record<string, commentTextoutput[] | undefined>;
 let featurePack: vscode.Disposable | undefined;
 /**
  * 【注意事项】
@@ -95,6 +96,7 @@ interface annotationProcessingRequest {
 //================= 1. 关键函数入口 ================= //
 export function activate(context: vscode.ExtensionContext) {
     const initialization = new initialize(context);
+    processor.z();
     initialization.trigger();
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -207,8 +209,6 @@ class initialize {
             })
         );
         this.updateSubscriptions();
-        const configs = vscode.workspace.getConfiguration("MixinHelper");
-        console.log(`[调试] ${JSON.stringify(configs.get("Settings"),null,2)}`);
     }
     private updateSubscriptions() {
         // 1. 【关键步骤】先销毁并清空旧的动态监听器
@@ -423,6 +423,18 @@ class utils {
             md.appendCodeblock(codeSnippet, 'scss');
         }
         return md;
+    }
+    static getUserCustomSetings(DEFAULT_JSDOS: userCustomObjArray) {
+        const userObj: userCustomObjArray = DEFAULT_JSDOS;
+        const userConfigs = vscode.workspace.getConfiguration("MixinHelper").get("userCustomComments") || {};
+        for (const [trigger, rules] of Object.entries(userConfigs)) {
+            if (!userObj[trigger]) { userObj[trigger] = []; }
+            if (Array.isArray(rules)) {
+                userObj[trigger].push(...rules);
+            }
+        }
+        console.log(`[调试] ${JSON.stringify(userObj, null, 2)}`);
+        return userObj;
     }
 }
 class strategySplitter {
@@ -697,6 +709,47 @@ class processor {
         const hover = new vscode.Hover(phaseII, range);
         // 5. 返回结果
         return hover;
+    }
+    static z() {
+        const DEFAULT_JSDOS: userCustomObjArray = {
+            "@param": ["italic", "code", "raw"],
+            "@return": ["italic", "code", "raw"],
+            "@description": ["italic", "raw"],
+        };
+        const FORMAT_DICTIONARY = {
+            "bold": (t: string) => `**${t}**`,
+            "italic": (t: string) => `*${t}*`,
+            "strikethrough": (t: string) => `~~${t}~~`,
+            "allBoldAndItalic": (t: string) => `***${t}***`,
+            "underline": (t: string) => `<ins>${t}</ins>`,
+            "quotingText": (t: string) => `>${t}`,
+            "code": (t: string) => `\`${t}\``,
+            "raw": (t: string) => `${t}`,
+        };
+        const userCustom = utils.getUserCustomSetings(DEFAULT_JSDOS);
+        const parts = "@param zz zzz".trim().split(/\s+/);
+        const p0 = parts[0];
+        // formatRulse 返回 @param 
+        const formatRulse = userCustom[p0];
+        if (!formatRulse) { return; };
+        let phaseI: string[] = [];
+        for (let i = 0; i < parts.length; i++) {
+            const text = parts[i];
+            const met = formatRulse[i];
+            console.log(`[调试] ${met}`);
+            if (met && met in FORMAT_DICTIONARY) {
+                const result = FORMAT_DICTIONARY[met as keyof typeof FORMAT_DICTIONARY](text);
+                phaseI.unshift(result);
+            } else {
+                const result = FORMAT_DICTIONARY["raw"](text);
+                phaseI.unshift(result);
+            }
+        }
+        const phaseII = phaseI
+            .filter(line => line !== '') // 过滤掉空行
+            .join('\n\n'); // 用换行符拼接
+        console.log(`[调试] ${phaseII}`);
+        return phaseII;
     }
 }
 /** 事务处理器
