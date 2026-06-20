@@ -433,7 +433,7 @@ class utils {
                 userObj[trigger].push(...rules);
             }
         }
-        console.log(`[调试] ${JSON.stringify(userObj, null, 2)}`);
+        // console.log(`[调试] ${JSON.stringify(userObj, null, 2)}`);
         return userObj;
     }
 }
@@ -710,7 +710,7 @@ class processor {
         // 5. 返回结果
         return hover;
     }
-    static z() {
+    static z(part?:string) {
         const DEFAULT_JSDOS: userCustomObjArray = {
             "@param": ["italic", "code", "raw"],
             "@return": ["italic", "code", "raw"],
@@ -731,7 +731,7 @@ class processor {
         const p0 = parts[0];
         // formatRulse 返回 @param 
         const formatRulse = userCustom[p0];
-        if (!formatRulse) { return; };
+        if (!formatRulse) { return /* part */; };
         let phaseI: string[] = [];
         for (let i = 0; i < parts.length; i++) {
             const text = parts[i];
@@ -739,15 +739,14 @@ class processor {
             console.log(`[调试] ${met}`);
             if (met && met in FORMAT_DICTIONARY) {
                 const result = FORMAT_DICTIONARY[met as keyof typeof FORMAT_DICTIONARY](text);
-                phaseI.unshift(result);
+                phaseI.push(result);
             } else {
-                const result = FORMAT_DICTIONARY["raw"](text);
-                phaseI.unshift(result);
+                phaseI.push(text);
+                //unshift
             }
         }
         const phaseII = phaseI
-            .filter(line => line !== '') // 过滤掉空行
-            .join('\n\n'); // 用换行符拼接
+            .join(' '); // 用换行符拼接
         console.log(`[调试] ${phaseII}`);
         return phaseII;
     }
