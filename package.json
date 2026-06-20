@@ -116,6 +116,34 @@
               "markdownDescription": "**决定当 Mixin 和调用写在同一行时，是否将其视为“引用”。**\n\n- **strict (严格)**：如果代码中包含冒号 `:`，插件会认为这是 CSS 属性赋值，从而**忽略**该行。\n- **losse (宽松)**：即使包含冒号 `:`，插件也会强制识别为 Mixin 引用。\n\n---\n**示例：** `.mixin() { color: red; }`\n在 strict 模式下，因为存在冒号，该行会被跳过。"
             }
           }
+        },
+        "MixinHelper.Settings": {
+          "type": "object",
+          "markdownDescription": "自定义你的快捷指令字典。\n\n- **左边 (Key)**：是你定义的触发暗号。建议以 `@` 开头（如 `@p`），这样既好记又不容易和代码里的标准注释冲突。\n- **右边 (Value)**：是一串转换规则。填入你想要的样式单词，用空格隔开即可。\n\n例如：`\"@p\": [\"bold\", \"code\"]`",
+          "properties": {},
+          "additionalProperties": {
+            "type": "array",
+            "description": "该触发符对应的格式化规则列表",
+            "items": {
+              "type": "string",
+              "enum": [
+                "bold",
+                "italic",
+                "underline",
+                "code",
+                "raw",
+                "strike"
+              ],
+              "enumDescriptions": [
+                "将文本转换为 Markdown 加粗格式 (**text**)",
+                "将文本转换为 Markdown 斜体格式 (*text*)",
+                "将文本转换为 Markdown 下划线格式 (<u>text</u>)",
+                "将文本转换为行内代码格式 (`text`)",
+                "保持原始文本不变，不进行任何格式化",
+                "将文本转换为删除线格式 (~~text~~)"
+              ]
+            }
+          }
         }
       }
     }

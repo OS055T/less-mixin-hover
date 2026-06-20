@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
-import { massageUtils } from "./utils/logger";
-import { CacheManager } from "./utils/cacheManager";
+import { CacheManager, messageUtils } from "./utils/index";
 const lookup = new Map<string, Record<string, commentTextoutput[] | undefined>>();
+let currentFileContext: Record<string, commentTextoutput[] | undefined> ;
 let featurePack: vscode.Disposable | undefined;
 /**
  * 【注意事项】
@@ -14,6 +14,7 @@ let config: mixinConfig = {
     syncMapOnOpen: true,
     syncMapOnSave: false,
     syncMapOnFocus: false,
+    enableNotification: "logSilently",
 };
 let advancedConfig: advancedmixinConfig = {
     maxPercentage: 50,
@@ -26,6 +27,7 @@ const DEFAULT_CONFIG_MAP: mixinConfig = {
     syncMapOnOpen: true,
     syncMapOnSave: false,
     syncMapOnFocus: false,
+    enableNotification: "logSilently",
 } as const;
 const DEFAULT_ADVANCED_CONFIG_MAP: advancedmixinConfig = {
     maxPercentage: 50,
@@ -38,6 +40,7 @@ interface mixinConfig {
     syncMapOnOpen: boolean,
     syncMapOnSave: boolean,
     syncMapOnFocus: boolean,
+    enableNotification: string,
 };
 interface advancedmixinConfig {
     maxPercentage: number,
@@ -114,7 +117,7 @@ class initialize {
         this.cacheManager = new CacheManager(context);  // 实例化
     }
     trigger() {
-        console.log('[调试] NixinHelper 正在激活...');
+        // console.log('[调试] NixinHelper 正在激活...');
         if (!vscode.workspace.isTrusted) {
             console.warn('[调试][error] 当前工作区未受信任,MixinHelper 将保持静默状态以确保安全。');
             return;
@@ -122,8 +125,9 @@ class initialize {
         console.log("[调试] 环境就绪,开始同步 MAP...");
         this.updateConfig();
         this.updateConfigBeta();
-        console.log(`[调试] 基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
-        console.log(`[调试] 高级设置 最大百分比: ${advancedConfig.maxPercentage},最大Mixin数:${advancedConfig.maxMixinCount},排查模式:${advancedConfig.troubleshootingMode}`);
+        // const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
+        // console.log(`[调试] 基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
+        // console.log(`[调试] 高级设置 最大百分比: ${maxPercentage},最大Mixin数:${maxMixinCount},排查模式:${troubleshootingMode}`);
         //设置更改
         this.context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration((e) => {
@@ -158,40 +162,53 @@ class initialize {
                 const editor = vscode.window.activeTextEditor;
                 if (!editor) { return; }
                 try {
+                    const { enableNotification } = config;
                     const docId = editor.document.uri.fsPath;
                     this.cacheManager.invalidateCache(docId);
                     await new searchExecutor(editor.document).handleDocumentUpdate("switch", this.cacheManager);
-                    massageUtils.showInfo("加载完成");
-                    massageUtils.logObejct("当前缓存内容", lookup);
+                    enableNotification !== "disableNotifications" && (
+                        messageUtils.showInfo("加载完成"),
+                        enableNotification !== "popupWithoutLog" &&
+                        messageUtils.logObejct("当前缓存内容", lookup, enableNotification)
+                    );
                 } catch (error) {
-                    massageUtils.showInfo(`${error}`);
+                    messageUtils.showInfo(`${error}`);
                 }
             }),
+            // 加载缓存
             vscode.commands.registerCommand('less-mixin-hover.loadCurrentFileCache', async () => {
                 const editor = vscode.window.activeTextEditor;
                 if (!editor) { return; }
                 try {
+                    const { enableNotification } = config;
                     const docId = editor.document.uri.fsPath;
                     const map = this.cacheManager.readCache(docId);
                     if (map) {
                         lookup.set(docId, map);
-                        massageUtils.showInfo("当前文件缓存已加载");
-                        massageUtils.logObejct("当前文件缓存", lookup);
+                        currentFileContext = map;
+                        enableNotification !== "disableNotifications" && (
+                            messageUtils.showInfo("当前文件缓存已加载"),
+                            enableNotification !== "popupWithoutLog" &&
+                            messageUtils.logObejct("当前文件缓存", lookup, enableNotification)
+                        );
                     } else {
                         await new searchExecutor(editor.document).handleDocumentUpdate("switch", this.cacheManager);
-                        massageUtils.showInfo("当前文件好像没有缓存? 已启用刷新Map缓存");
+                        enableNotification !== "disableNotifications" && messageUtils.showInfo("当前文件好像没有缓存? 已启用刷新Map缓存");
                     }
                 } catch (error) {
-                    massageUtils.showInfo(`${error}`);
+                    messageUtils.showInfo(`${error}`);
                 }
             }),
+            // 清空内存
             vscode.commands.registerCommand("less-mixin-hover.clearAllCache", async () => {
                 this.cacheManager.clearAllCache();
-                lookup.clear();  // 同时清空内存
-                massageUtils.showInfo("所有缓存已清除");
+                lookup.clear();
+                config.enableNotification !== "disableNotifications" && messageUtils.showInfo("所有缓存已清除");
             })
         );
         this.updateSubscriptions();
+        const configs = vscode.workspace.getConfiguration("MixinHelper");
+        console.log(`[调试] ${JSON.stringify(configs.get("Settings"),null,2)}`);
     }
     private updateSubscriptions() {
         // 1. 【关键步骤】先销毁并清空旧的动态监听器
@@ -208,15 +225,15 @@ class initialize {
             if (config.syncMapOnOpen) {
                 disposable.push(vscode.workspace.onDidOpenTextDocument((doc) => {
                     if (config.searchMode !== "map") { return; };
-                    handleMapTrigger(doc, "open");
                     console.log("[调试] 触发I打开文件");
+                    handleMapTrigger(doc, "open");
                 }));
             }
             //触发II保存文件
             if (config.syncMapOnSave) {
                 disposable.push(vscode.workspace.onDidSaveTextDocument((doc) => {
-                    handleMapTrigger(doc);
                     console.log("[调试] 触发II保存文件");
+                    handleMapTrigger(doc);
                 }));
             }
             //触发III切换文件
@@ -224,10 +241,12 @@ class initialize {
                 disposable.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
                     if (config.searchMode !== "map") { return; };
                     if (editor && editor.document) {
+                        console.log("[调试] 触发III切换文件");
                         const path = editor.document.uri.fsPath;
                         if (!lookup.has(path)) {
                             handleMapTrigger(editor.document);
-                            console.log("[调试] 触发III切换文件");
+                        } else {
+                            currentFileContext = lookup.get(path) ?? {} as any;
                         }
                     }
                 }));
@@ -275,7 +294,7 @@ class initialize {
             const userValue = rawAdvancedObj[key];
             // 获取默认值作为兜底
             const defaultValue = DEFAULT_ADVANCED_CONFIG_MAP[key];
-            // 写入全局变量 advancedConfig
+            // 写入全局变量
             (advancedConfig as any)[key] = userValue !== undefined ? userValue : defaultValue;
         };
         if (target) {
@@ -285,7 +304,7 @@ class initialize {
         } else {
             // --- 场景 B：未指定目标（通常是插件启动时的初始化） ---
             // console.log("[Beta Init] 正在初始化所有高级配置...");
-            console.log("[调试] VS Code 返回的原始配置对象:", JSON.stringify(rawAdvancedObj, null, 2));
+            // console.log("[调试] VS Code 返回的原始配置对象:", JSON.stringify(rawAdvancedObj, null, 2));
             for (const key of Object.keys(DEFAULT_ADVANCED_CONFIG_MAP) as Array<keyof typeof DEFAULT_ADVANCED_CONFIG_MAP>) {
                 processKey(key);
             }
@@ -616,12 +635,13 @@ class processor {
      */
     globalSearch(): Record<string, commentTextoutput[] | undefined> | undefined {
         const a = this.document.lineCount;
-        const percent = Math.min(Math.max(advancedConfig.maxPercentage, 0), 100);
+        const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
+        const percent = Math.min(Math.max(maxPercentage, 0), 100);
         const limit = percent !== 0
             ? Math.floor(a * (percent / 100))
             : a;
-        const scanLimit = advancedConfig.maxMixinCount;
-        const utilspatcher = new strategySplitter(this.util, advancedConfig.troubleshootingMode);
+        const scanLimit = maxMixinCount;
+        const utilspatcher = new strategySplitter(this.util, troubleshootingMode);
         let phaseI = [];
         // console.log(a);
         for (let i = 0, foundCount = 0;
@@ -711,9 +731,7 @@ class searchExecutor {
         // 既然你要构建完整的 Key，建议直接用 match[0]，或者手动拼接
         const key = match[1];
         if (!key) { return undefined; }
-        const docId = this.document.uri.fsPath;
-        // phaseIII:commentTextoutput[] 
-        const phaseIII = lookup.get(docId)?.[key];// Phase 1
+        const phaseIII = currentFileContext?.[key];// Phase 1
         if (!phaseIII) { return undefined; }
         const APR: annotationProcessingRequest = {
             position: position,
@@ -790,9 +808,10 @@ class searchExecutor {
                 map = Toolkit.globalSearch();
                 if (map) {
                     lookup.set(docId, map);
+                    currentFileContext = map;
                     cacheManager.writeCache(docId, map);
                 }
-            } else { lookup.set(docId, map); }
+            } else { lookup.set(docId, map); currentFileContext = map; }
         } catch (error) { console.error("错误堆栈", error); }
     }
 }
@@ -864,6 +883,6 @@ class dispatcher {
 function cleanupLookup() {
     lookup?.clear();
 }
-export function deactivate() { 
+export function deactivate() {
     cleanupLookup();
 }
