@@ -79,16 +79,16 @@ interface annotationProcessingRequest {
     mixinName: string,
     annotationContext: annotationContext,
 }
-function log(target: any, key: string, descriptor: PropertyDescriptor) {
-    const a = descriptor.value;
-    descriptor.value = function (...atgs: any[]) {
-        console.log(`[调试][log] 调用方法${key},参数:`, atgs);
-        const b = a.apply(this, atgs);
-        console.log(`[调试][log] 返回`, b);
-        return b;
-    };
-    return descriptor;
-}
+// function log(target: any, key: string, descriptor: PropertyDescriptor) {
+//     const a = descriptor.value;
+//     descriptor.value = function (...atgs: any[]) {
+//         console.log(`[调试][log] 调用方法${key},参数:`, atgs);
+//         const b = a.apply(this, atgs);
+//         console.log(`[调试][log] 返回`, b);
+//         return b;
+//     };
+//     return descriptor;
+// }
 //================= 1. 关键函数入口 ================= //
 export function activate(context: vscode.ExtensionContext) {
     const initialization = new initialize(context);
@@ -188,7 +188,7 @@ class initialize {
             vscode.commands.registerCommand("less-mixin-hover.clearAllCache", async () => {
                 this.cacheManager.clearAllCache();
                 lookup.clear();  // 同时清空内存
-                massageUtils.showInfo("✅ 所有缓存已清除");
+                massageUtils.showInfo("所有缓存已清除");
             })
         );
         this.updateSubscriptions();
@@ -209,14 +209,14 @@ class initialize {
                 disposable.push(vscode.workspace.onDidOpenTextDocument((doc) => {
                     if (config.searchMode !== "map") { return; };
                     handleMapTrigger(doc, "open");
-                    console.log("[调试]触发I打开文件");
+                    console.log("[调试] 触发I打开文件");
                 }));
             }
             //触发II保存文件
             if (config.syncMapOnSave) {
                 disposable.push(vscode.workspace.onDidSaveTextDocument((doc) => {
                     handleMapTrigger(doc);
-                    console.log("[调试]触发II保存文件");
+                    console.log("[调试] 触发II保存文件");
                 }));
             }
             //触发III切换文件
@@ -227,13 +227,13 @@ class initialize {
                         const path = editor.document.uri.fsPath;
                         if (!lookup.has(path)) {
                             handleMapTrigger(editor.document);
-                            console.log("[调试]触发III切换文件");
+                            console.log("[调试] 触发III切换文件");
                         }
                     }
                 }));
             }
         }
-        console.log(`[调试]MAP准备订阅${disposable.length}个`);
+        console.log(`[调试] MAP准备订阅${disposable.length}个`);
         if (disposable.length > 0) {
             // 3. 存入临时池（用于下次更新时销毁）
             featurePack = vscode.Disposable.from(...disposable);
@@ -689,7 +689,7 @@ class searchExecutor {
     ) {
         this.document = document;
     }
-    @log
+    // @log
     map(position: vscode.Position): vscode.Hover | undefined {
         // PhaseI 1-1 ID ↘
         // PhaseII  2-1 set 方式 val ↘
@@ -701,8 +701,15 @@ class searchExecutor {
         const phase = toolkit.mixinProbabilityScreening(position.line);
         if (!phase) { return undefined; }
         const phaseI = this.document.lineAt(position.line).text;
-        const match = phaseI.match(/\b([a-zA-Z0-9_-]+)\b/);
-        const key = match?.[1];
+        // const match = phaseI.match(/\b([a-zA-Z0-9_-]+)\b/);
+        // const key = match?.[1];
+        // 使用新的正则
+        const match = phaseI.match(/[.#]([^()\s]+)/);
+        if (!match) { return undefined; }
+        // match[0] 是 ".className" (包含前缀)
+        // match[1] 是 "className" (纯名字)
+        // 既然你要构建完整的 Key，建议直接用 match[0]，或者手动拼接
+        const key = match[1];
         if (!key) { return undefined; }
         const docId = this.document.uri.fsPath;
         // phaseIII:commentTextoutput[] 
@@ -776,16 +783,16 @@ class searchExecutor {
             }
             // 0.0.3.4? 还是 0.0.4?新增 先尝试读取缓存
             let map = cacheManager.readCache(docId);
+            const Toolkit = new processor(doc);
             if (!map) {
                 // 更新 Map
                 console.log(`[调试] 执行全量扫描...`);
-                const Toolkit = new processor(doc);
                 map = Toolkit.globalSearch();
                 if (map) {
                     lookup.set(docId, map);
                     cacheManager.writeCache(docId, map);
                 }
-            }
+            } else { lookup.set(docId, map); }
         } catch (error) { console.error("错误堆栈", error); }
     }
 }
@@ -853,4 +860,10 @@ class dispatcher {
         return undefined;
     }
 }
-export function deactivate() { }
+
+function cleanupLookup() {
+    lookup?.clear();
+}
+export function deactivate() { 
+    cleanupLookup();
+}

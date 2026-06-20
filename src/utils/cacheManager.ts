@@ -76,7 +76,7 @@ export class CacheManager {
             const cacheEntry: CacheEntry = JSON.parse(cacheContent);
 
             // 4. 缓存有效 ✅
-            console.log(`✅ 缓存命中上次记录时间为${cacheEntry.metadata.dateStamp}`);
+            console.log(`[调试] 缓存命中上次记录时间为${cacheEntry.metadata.dateStamp}`);
             return cacheEntry.data;
 
         } catch (error) {
