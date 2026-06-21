@@ -33,6 +33,11 @@
         "command": "less-mixin-hover.clearAllCache",
         "title": "清空所有缓存",
         "category": "MixinHelper"
+      },
+      {
+        "command": "less-mixin-hover.Debug",
+        "title": "调试 记得删",
+        "category": "MixinHelper"
       }
     ],
     "configuration": {
