@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import { CacheManager, messageUtils, userCustomObjArray } from "./utils/index";
-import { text } from "stream/consumers";
 const lookup = new Map<string, Record<string, commentTextoutput[] | undefined>>();
 let currentFileContext: Record<string, commentTextoutput[] | undefined>;
 let featurePack: vscode.Disposable | undefined;
@@ -96,7 +95,7 @@ interface annotationProcessingRequest {
 //================= 1. 关键函数入口 ================= //
 export function activate(context: vscode.ExtensionContext) {
     const initialization = new initialize(context);
-    processor.z();
+    utils.formatJSDocLine("@param 1 2 3 4 5 6 7");
     initialization.trigger();
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -331,7 +330,6 @@ class utils {
         this.document = document;
     }
     /**验证目标行号是否符合Mixin格式
-     * 
      * @param  i - 目标行号
      * @returns 布尔值 */
     validateMixin(i: number): boolean {
@@ -361,6 +359,36 @@ class utils {
         }
         return false;
     }
+    getJSDocComment(definitionLineIndex: number): string[] | null {
+        // 1. 从定义行的上一行开始倒序遍历
+        for (let i = definitionLineIndex - 1; i >= 0; i--) {
+            const lineText = this.document.lineAt(i).text.trim();
+            // 2. 终止条件：如果遇到空行，或者遇到了代码符号（如 '}'），说明注释区域结束了
+            if (lineText.startsWith('}')) { break; }
+            if (lineText === '') { continue; }
+            // 3. 识别结束标记 '*/'
+            if (lineText.endsWith('*/')) {
+                let phaseI: string[] = [];
+                // 继续向上寻找开始的 '/*'
+                for (let i2 = i; i2 >= 0; i2--) {
+                    const prevLine = this.document.lineAt(i2).text.trim();
+                    phaseI.unshift(prevLine); // 放入数组头部，保持顺序
+                    // 4. 识别开始标记 '/*'
+                    if (prevLine.startsWith('/*')) {
+                        // 5. 清洗数据：去掉 /*, */, * 以及首尾空格
+                        const phaseII = phaseI
+                            .map(line => line.replace(/\/\*|\*\/|\*/g, '').trim()) // 正则去除注释符号
+                            .filter(Boolean);
+                        return phaseII;
+                    }
+                }
+            }
+        }
+        return null; // 没找到
+    }
+    /** 
+     * @deprecated
+     */
     static formatDocStringToMd(input: string): commentTextoutput {
         // const example = input.match(/[\s\S]*@example\s*([\s\S*])/i);
         const example = input.match(/.+@example\s+(.*)/is);
@@ -428,6 +456,7 @@ class utils {
         const userObj: userCustomObjArray = DEFAULT_JSDOS;
         const userConfigs = vscode.workspace.getConfiguration("MixinHelper").get("userCustomComments") || {};
         for (const [trigger, rules] of Object.entries(userConfigs)) {
+            if (!trigger.startsWith("@")) { continue; }
             if (!userObj[trigger]) { userObj[trigger] = []; }
             if (Array.isArray(rules)) {
                 userObj[trigger].push(...rules);
@@ -436,6 +465,75 @@ class utils {
         // console.log(`[调试] ${JSON.stringify(userObj, null, 2)}`);
         return userObj;
     }
+    /**
+     * [纯工具] JSDoc 标签格式化器
+     * @description
+     * 将单行注释内容解析并组装为 Markdown 格式的悬停提示文本。
+     * 内部通过字典映射规则，自动处理加粗、代码块等样式渲染。
+     * ⚠️ 【高危警告】输入约束
+     * 本函数仅接受 **单行字符**。
+     * 严禁传入多行文本或完整文档块！
+     * @internal
+     * @usage 请在调用此函数前，务必在业务层完成换行符分割与分流逻辑。
+     * @param {string} part - 待格式化的单行文本片段
+     * @returns {string} 格式化后的 Markdown 字符串
+     */
+    static formatJSDocLine(part?: string) {
+        const DEFAULT_JSDOS: userCustomObjArray = {
+            "default": ["italic", "raw"],
+            "@param": ["italic", "code", "raw"],
+            "@paramCode": ["italic", "code", "code", "raw"],
+            "@return": ["italic", "code", "raw"],
+            "@description": ["italic", "preLineBreak"],
+        };
+        const DEFAULT_DICTIONARY = {
+            "bold": (t: string) => `**${t}**`,
+            "italic": (t: string) => `*${t}*`,
+            "strikethrough": (t: string) => `~~${t}~~`,
+            "allBoldAndItalic": (t: string) => `***${t}***`,
+            "underline": (t: string) => `<ins>${t}</ins>`,
+            "quotingText": (t: string) => `>${t}`,
+            // 代码格式
+            "code": (t: string) => `\`${t}\``,
+            // 不改动
+            "raw": (t: string) => `${t}`,
+            // 换行前置 raw 的附属
+            "preLineBreak": (t: string) => `\n\n${t}`
+        };
+        const processParts = (parts: string[], rules: string[]) => {
+            let phaseI: string[] = [];
+            for (let i = 0; i < parts.length; i++) {
+                const text = parts[i];
+                const met = rules[i];
+                console.log(`[调试] ${met}`);
+                if (met && met in DEFAULT_DICTIONARY) {
+                    const result = DEFAULT_DICTIONARY[met as keyof typeof DEFAULT_DICTIONARY](text);
+                    phaseI.push(result);
+                } else {
+                    phaseI.push(text);
+                }
+            }
+            const phaseII = phaseI
+                .join(' '); // 用换行符拼接
+            console.log(`[调试] ${phaseII}`);
+            return phaseII;
+        };
+        const userCustom = this.getUserCustomSetings(DEFAULT_JSDOS);
+        const parts = part ? part.trim().split(/\s+/) : [];
+        const p0 = parts[0];
+        // formatRulse 返回 @param 
+        let activeRules: string[] | undefined = userCustom[p0];
+        if (!activeRules && p0.startsWith("@")) {
+            console.log(`[调试][error] 未找到标签 '${p0}'，使用 'default' 代替 `);
+            activeRules = userCustom["default"];
+        }
+        if (activeRules) {
+            return processParts(parts, activeRules);
+        } else {
+            return part;
+        }
+    }
+
 }
 class strategySplitter {
     private executionGoals: utils;
@@ -611,6 +709,7 @@ class processor {
     /** 获取指定行上方的文档注释 (JSDoc 风格)
      * @param definitionLineIndex Mixin 定义所在的行号
      * @returns 提取出的纯文本注释内容，如果没有找到则返回 null
+     * @example getDocCommentAbove()
      */
     getDocCommentAbove(definitionLineIndex: number): commentTextoutput | null {
         // 1. 从定义行的上一行开始倒序遍历
@@ -709,46 +808,6 @@ class processor {
         const hover = new vscode.Hover(phaseII, range);
         // 5. 返回结果
         return hover;
-    }
-    static z(part?:string) {
-        const DEFAULT_JSDOS: userCustomObjArray = {
-            "@param": ["italic", "code", "raw"],
-            "@return": ["italic", "code", "raw"],
-            "@description": ["italic", "raw"],
-        };
-        const FORMAT_DICTIONARY = {
-            "bold": (t: string) => `**${t}**`,
-            "italic": (t: string) => `*${t}*`,
-            "strikethrough": (t: string) => `~~${t}~~`,
-            "allBoldAndItalic": (t: string) => `***${t}***`,
-            "underline": (t: string) => `<ins>${t}</ins>`,
-            "quotingText": (t: string) => `>${t}`,
-            "code": (t: string) => `\`${t}\``,
-            "raw": (t: string) => `${t}`,
-        };
-        const userCustom = utils.getUserCustomSetings(DEFAULT_JSDOS);
-        const parts = "@param zz zzz".trim().split(/\s+/);
-        const p0 = parts[0];
-        // formatRulse 返回 @param 
-        const formatRulse = userCustom[p0];
-        if (!formatRulse) { return /* part */; };
-        let phaseI: string[] = [];
-        for (let i = 0; i < parts.length; i++) {
-            const text = parts[i];
-            const met = formatRulse[i];
-            console.log(`[调试] ${met}`);
-            if (met && met in FORMAT_DICTIONARY) {
-                const result = FORMAT_DICTIONARY[met as keyof typeof FORMAT_DICTIONARY](text);
-                phaseI.push(result);
-            } else {
-                phaseI.push(text);
-                //unshift
-            }
-        }
-        const phaseII = phaseI
-            .join(' '); // 用换行符拼接
-        console.log(`[调试] ${phaseII}`);
-        return phaseII;
     }
 }
 /** 事务处理器
