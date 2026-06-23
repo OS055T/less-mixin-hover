@@ -96,10 +96,10 @@
           "properties": {
             "maxPercentage": {
               "type": "number",
-              "default": 50,
+              "default": 30,
               "minimum": 0,
               "maximum": 100,
-              "markdownDescription": "**[I/O 截断]** 例如设为 50,插件只会读取文件的前一半,后面的代码直接跳过不看。"
+              "markdownDescription": "**[I/O 截断]** 例如设为 30,插件只会读取文件的前30%,后面的代码直接跳过不看。"
             },
             "maxMixinCount": {
               "type": "number",
@@ -120,7 +120,10 @@
               ],
               "markdownDescription": "**决定当 Mixin 和调用写在同一行时，是否将其视为“引用”。**\n\n- **strict (严格)**：如果代码中包含冒号 `:`，插件会认为这是 CSS 属性赋值，从而**忽略**该行。\n- **losse (宽松)**：即使包含冒号 `:`，插件也会强制识别为 Mixin 引用。\n\n---\n**示例：** `.mixin() { color: red; }`\n在 strict 模式下，因为存在冒号，该行会被跳过。"
             }
-          }
+          },
+          "tags": [
+            "advanced"
+          ]
         },
         "MixinHelper.userCustomComments": {
           "type": "object",
@@ -135,11 +138,12 @@
                 "bold",
                 "italic",
                 "strikethrough",
-                "allBoldAndItalic",
+                "boldAndItalic",
                 "underline",
                 "quotingText",
                 "code",
-                "raw"
+                "raw",
+                "null"
               ],
               "enumDescriptions": [
                 "将文本转换为 Markdown 加粗格式 (**text**)",
@@ -147,12 +151,16 @@
                 "将文本转换为 Markdown 删除线格式 (~~text~~)",
                 "将文本转换为 Markdown 加粗+斜体格式 (***text***)",
                 "将文本转换为 Markdown 下划线格式 (<u>text</u>,<ins>text</ins>)",
-                "将文本转换为 Markdown 引用文本格式 (>text)",
+                "将文本转换为 Markdown 引用文本格式 (> text)",
                 "将文本转换为 Markdown 行内代码格式 (`text`)",
-                "保持原始文本不变，不进行任何格式化"
+                "保持原始文本不变，不进行任何格式化",
+                "啥也没有"
               ]
             }
-          }
+          },
+          "tags": [
+            "experimental"
+          ]
         }
       }
     }
@@ -174,6 +182,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.19.21",
+    "@types/postcss-less": "^4.0.7",
     "@types/vscode": "^1.120.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
@@ -182,5 +191,9 @@
     "npm-run-all": "^4.1.5",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.56.1"
+  },
+  "dependencies": {
+    "postcss": "^8.5.15",
+    "postcss-less": "^6.0.0"
   }
 }

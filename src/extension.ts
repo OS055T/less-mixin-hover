@@ -1,7 +1,31 @@
 import * as vscode from "vscode";
-import { CacheManager, messageUtils, userCustomObjArray } from "./utils/index";
-const lookup = new Map<string, Record<string, commentTextoutput[] | undefined>>();
-let currentFileContext: Record<string, commentTextoutput[] | undefined>;
+// import less from 'postcss-less';
+// import fs from 'fs';
+import {
+    CacheManager,
+    messageUtils,
+    userCustomObjArray
+} from "./utils/index";
+// 注释块
+import {
+    annotationLine,
+    annotationBlock,
+    FileAnnotationContext,
+    workspaceAnnotationMap
+} from "./utils/index";
+import {
+    annotationContextbeta,
+    annotationProcessingRequestbeta
+} from "./utils/index";
+import {
+    mixinConfig,
+    advancedmixinConfig,
+} from "./utils/index";
+import {
+    LogPerformance
+} from "./utils/index";
+const lookup: workspaceAnnotationMap = new Map<string, Record<string, FileAnnotationContext[] | undefined>>();
+let currentFileContextbeta: FileAnnotationContext = {};
 let featurePack: vscode.Disposable | undefined;
 /**
  * 【注意事项】
@@ -17,10 +41,11 @@ let config: mixinConfig = {
     enableNotification: "logSilently",
 };
 let advancedConfig: advancedmixinConfig = {
-    maxPercentage: 50,
+    maxPercentage: 30,
     maxMixinCount: 10,
     troubleshootingMode: "strict",
 };
+let USER_JSDOS: userCustomObjArray = {};
 // 2. 静态常量层 (Static Defaults - const ... as const)
 const DEFAULT_CONFIG_MAP: mixinConfig = {
     searchMode: "map",
@@ -30,71 +55,27 @@ const DEFAULT_CONFIG_MAP: mixinConfig = {
     enableNotification: "logSilently",
 } as const;
 const DEFAULT_ADVANCED_CONFIG_MAP: advancedmixinConfig = {
-    maxPercentage: 50,
+    maxPercentage: 30,
     maxMixinCount: 10,
     troubleshootingMode: "strict",
 } as const;
+const DEFAULT_JSDOS: userCustomObjArray = {
+    "default": ["italic", "raw"],
+    "@param": ["italic", "code", "raw"],
+    "@paramCode": ["italic", "code", "code", "raw"],
+    "@return": ["italic", "code", "raw"],
+    "@description": ["italic", "preLineBreak"],
+    "@example": ["italic"]
+} as const;
 // 3. 接口定义层 (Interfaces)
-interface mixinConfig {
-    searchMode: string,
-    syncMapOnOpen: boolean,
-    syncMapOnSave: boolean,
-    syncMapOnFocus: boolean,
-    enableNotification: string,
-};
-interface advancedmixinConfig {
-    maxPercentage: number,
-    maxMixinCount: number,
-    troubleshootingMode: string,
-}
-/**
- * @interface TaskContext
- * @description 【通用上下文数据包】用于在系统各层级间传递数据的标准化容器。
- *              所有的输入参数在进入 trigger() 之前，必须按照此结构进行组装。
- *
- * @packing_rules [打包准则 / Packing Protocol]
- * 1. **单一入口原则**：禁止向 trigger 传递零散参数（如 doc, line），必须在调用前封装为此对象。
- * 2. **字段职责分离**：
- *    - source: 专用于 map 模式，承载文档全文内容。
- *    - position: 专用于 realtime 模式，承载光标位置信息。
- * 3. **防御性打包**：如果不确定某个字段是否有值，请显式传入 undefined，不要省略键名。
- *
- * @property {string} [source] - [Map模式专用] 区分哪个监听器打开的
- * @property {vscode.Position} [position] - [Realtime模式专用] VS Code 原生位置对象。
- */
 interface taskConstext {
     source?: string;
     position?: vscode.Position;
     line?: number;
 };
-//==================
-interface commentTextoutput {
-    text: string,
-    example?: string
-}
-interface annotationContext {
-    currentMode: string,
-    realtimetext?: commentTextoutput | null,
-    mapText?: commentTextoutput[] | undefined
-}
-interface annotationProcessingRequest {
-    position: vscode.Position,
-    mixinName: string,
-    annotationContext: annotationContext,
-}
-// function log(target: any, key: string, descriptor: PropertyDescriptor) {
-//     const a = descriptor.value;
-//     descriptor.value = function (...atgs: any[]) {
-//         console.log(`[调试][log] 调用方法${key},参数:`, atgs);
-//         const b = a.apply(this, atgs);
-//         console.log(`[调试][log] 返回`, b);
-//         return b;
-//     };
-//     return descriptor;
-// }
 //================= 1. 关键函数入口 ================= //
 export function activate(context: vscode.ExtensionContext) {
-    const initialization = new initialize(context);
+    const initialization = new pluginInitializer(context);
     // utils.formatJSDocLine("@example 1");
     initialization.trigger();
     context.subscriptions.push(
@@ -108,7 +89,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 }
-class initialize {
+class pluginInitializer {
     private context: vscode.ExtensionContext;
     private cacheManager: CacheManager;  // 新增
     constructor(
@@ -124,8 +105,7 @@ class initialize {
             return;
         }
         console.log("[调试] 环境就绪,开始同步 MAP...");
-        this.updateConfig();
-        this.updateConfigBeta();
+        configManager.trigger();
         // const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
         // console.log(`[调试] 基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
         // console.log(`[调试] 高级设置 最大百分比: ${maxPercentage},最大Mixin数:${maxMixinCount},排查模式:${troubleshootingMode}`);
@@ -133,15 +113,17 @@ class initialize {
         this.context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration((e) => {
                 if (!e.affectsConfiguration("MixinHelper")) { return; }
-                console.log("[调试]触发IV设置更改");
+                console.log("[调试] 触发IV设置更改");
                 if (e.affectsConfiguration("MixinHelper.advancedSettings")) {
-                    this.updateConfigBeta();
+                    configManager.updateAdvancedConfig();
+                } else if (e.affectsConfiguration("MixinHelper.userCustomComments")) {
+                    configManager.updateuserCustomComments();
                 } else {
                     const keys = Object.keys(DEFAULT_CONFIG_MAP) as Array<keyof typeof DEFAULT_CONFIG_MAP>;
                     for (const key of keys) {
                         const fullKey = `MixinHelper.${key}`;
                         if (e.affectsConfiguration(fullKey)) {
-                            this.updateConfig(key);
+                            configManager.updateConfig(key);
                             this.updateSubscriptions();
                             const configkey = config[key];
                             console.log(`[调试]配置项 ${key} 已变更，当前值为: ${configkey}`);
@@ -186,7 +168,7 @@ class initialize {
                     const map = this.cacheManager.readCache(docId);
                     if (map) {
                         lookup.set(docId, map);
-                        currentFileContext = map;
+                        currentFileContextbeta = map;
                         enableNotification !== "disableNotifications" && (
                             messageUtils.showInfo("当前文件缓存已加载"),
                             enableNotification !== "popupWithoutLog" &&
@@ -204,13 +186,30 @@ class initialize {
             vscode.commands.registerCommand("less-mixin-hover.clearAllCache", async () => {
                 this.cacheManager.clearAllCache();
                 lookup.clear();
+                currentFileContextbeta = {};
                 config.enableNotification !== "disableNotifications" && messageUtils.showInfo("所有缓存已清除");
             }),
+            // Debug
             vscode.commands.registerCommand("less-mixin-hover.Debug", async () => {
                 const editor = vscode.window.activeTextEditor;
                 if (!editor) { return; }
-                new processor(editor.document).globalSearchbeta();
-            })
+                new searchExecutor(editor?.document).handleDocumentUpdate("switch", this.cacheManager);
+                console.log(currentFileContextbeta);
+                // const editor = vscode.window.activeTextEditor;
+                // if (!editor) { return; }
+                // const docId = editor.document.uri.fsPath;
+                // // 读取 Less 文件内容
+                // const lessCode = fs.readFileSync(docId, 'utf8');
+                // // 解析代码生成 AST
+                // const ast = less.parse(lessCode);
+                // console.log(ast);
+                // // 打印出 AST 的结构
+                // // console.log(JSON.stringify(ast, null, 2));
+                // // 遍历 AST 树
+                // ast.walk(node => {
+                //     console.log(node.type);
+                // });
+            }),
         );
         this.updateSubscriptions();
     }
@@ -243,14 +242,13 @@ class initialize {
             //触发III切换文件
             if (config.syncMapOnFocus) {
                 disposable.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
-                    if (config.searchMode !== "map") { return; };
                     if (editor && editor.document) {
                         console.log("[调试] 触发III切换文件");
                         const path = editor.document.uri.fsPath;
                         if (!lookup.has(path)) {
                             handleMapTrigger(editor.document);
                         } else {
-                            currentFileContext = lookup.get(path) ?? {} as any;
+                            currentFileContextbeta = lookup.get(path) ?? {} as any;
                         }
                     }
                 }));
@@ -266,7 +264,17 @@ class initialize {
             featurePack = undefined;
         }
     }
-    private updateConfig<T extends keyof typeof DEFAULT_CONFIG_MAP>(
+}
+class configManager {
+    private static _getRawConfig<T>(section: string): T | undefined {
+        return vscode.workspace.getConfiguration("MixinHelper").get<T>(section);
+    }
+    static trigger() {
+        this.updateConfig();
+        this.updateAdvancedConfig();
+        this.updateuserCustomComments();
+    }
+    static updateConfig<T extends keyof typeof DEFAULT_CONFIG_MAP>(
         target?: T,
     ) {
         const configs = vscode.workspace.getConfiguration("MixinHelper");
@@ -287,12 +295,11 @@ class initialize {
             }
         }
     }
-    private updateConfigBeta<T extends keyof typeof DEFAULT_ADVANCED_CONFIG_MAP>(
+    static updateAdvancedConfig<T extends keyof typeof DEFAULT_ADVANCED_CONFIG_MAP>(
         target?: T
     ) {
-        const configs = vscode.workspace.getConfiguration("MixinHelper");
         // 获取VS code对应的当前项
-        const rawAdvancedObj = configs.get("advancedSettings") as any;
+        const rawAdvancedObj = this._getRawConfig("advancedSettings") as typeof DEFAULT_ADVANCED_CONFIG_MAP;
         const processKey = (key: keyof typeof DEFAULT_ADVANCED_CONFIG_MAP) => {
             // 尝试从用户配置中获取当前项
             const userValue = rawAdvancedObj[key];
@@ -314,6 +321,16 @@ class initialize {
             }
         }
     }
+    static updateuserCustomComments() {
+        const userObj: userCustomObjArray = JSON.parse(JSON.stringify(DEFAULT_JSDOS));
+        const userConfigs = this._getRawConfig("userCustomComments") || {};
+        for (const [trigger, rules] of Object.entries(userConfigs)) {
+            if (!trigger.startsWith("@")) { continue; }
+            if (rules) { userObj[trigger] = rules; }
+        }
+        // console.log(`[调试] ${JSON.stringify(userConfigs, null, 2)}`);
+        USER_JSDOS = userObj;
+    }
 }
 function provideHover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken) {
     const a = new dispatcher(new searchExecutor(document), config.searchMode);
@@ -329,12 +346,13 @@ function provideHover(document: vscode.TextDocument, position: vscode.Position, 
  * 只管接收输入并稳定输出，绝不返回空值，输入啥奇怪东西就吐啥奇怪结果，不掺和业务逻辑。 */
 class utils {
     private document: vscode.TextDocument;
-    private static DEFAULT_DICTIONARY = {
+    private static readonly DEFAULT_DICTIONARY = {
         "bold": (t: string) => `**${t}**`,
         "italic": (t: string) => `*${t}*`,
         "strikethrough": (t: string) => `~~${t}~~`,
-        "allBoldAndItalic": (t: string) => `***${t}***`,
+        "boldAndItalic": (t: string) => `***${t}***`,
         "underline": (t: string) => `<ins>${t}</ins>`,
+        // 好像等于 Tap?
         "quotingText": (t: string) => `> ${t}`,
         // 代码格式
         "code": (t: string) => `\`${t}\``,
@@ -344,14 +362,6 @@ class utils {
         "preLineBreak": (t: string) => `\n\n${t}`,
         // 啥也没有
         "null": (t: string) => ""
-    };
-    private static DEFAULT_JSDOS: userCustomObjArray = {
-        "default": ["italic", "raw"],
-        "@param": ["italic", "code", "raw"],
-        "@paramCode": ["italic", "code", "code", "raw"],
-        "@return": ["italic", "code", "raw"],
-        "@description": ["italic", "preLineBreak"],
-        "@example": ["italic", "null"]
     };
     constructor(
         document: vscode.TextDocument,
@@ -388,6 +398,11 @@ class utils {
         }
         return false;
     }
+    /** 获取指定行上方的文档注释 (JSDoc 风格)
+     * @param definitionLineIndex Mixin 定义所在的行号
+     * @returns 提取出的纯文本注释内容，如果没有找到则返回 null
+     * @example getDocCommentAbove()
+     */
     getJSDocCommentbeta(definitionLineIndex: number): string[] | null {
         // 1. 从定义行的上一行开始倒序遍历
         for (let i = definitionLineIndex - 1; i >= 0; i--) {
@@ -415,84 +430,65 @@ class utils {
         }
         return null; // 没找到
     }
-    /** 
-     * @deprecated
-     */
-    static formatDocStringToMd(input: string): commentTextoutput {
-        // const example = input.match(/[\s\S]*@example\s*([\s\S*])/i);
-        const example = input.match(/.+@example\s+(.*)/is);
-        const phaseI = input.replace(/@param\s+(\w+)\s+(.*)/g, '*@param* `$1`: $2') // 转换 @param 为列表项
-            .replace(/@returns?\s+(.*)/g, '*@returns*: $1')    // 转换 @return
-            .replace(/@description\s+(.*)/g, '$1')             // 去掉 @description 标签只留内容
-            .replace(/@example/g, '*@Example:*\n\n');             // 强调 Example
-        const phaseII: commentTextoutput = { text: phaseI, example: example?.[1] };
-        return phaseII;
-    }
-    static porcessRawDocs(input: annotationContext, mixinName: string): vscode.MarkdownString {
-        let text = '';
-        let example: undefined | string = '';
+    static porcessRawDocsbeta(input: annotationContextbeta, mixinName: string): vscode.MarkdownString {
         const consttxt = '貌似没有写备注哦';
         const md = new vscode.MarkdownString();
         md.supportHtml = true; // 开启 HTML 支持，用于微调样式
         md.isTrusted = true;   // 信任内容，允许运行部分安全指令
         // --- 1. 顶部标题 (Mixin 名字) ---
         md.appendMarkdown(`<h2 style="font-size:1.5em;">${mixinName}</h2>\n\n`);
-        if (input.currentMode === '2') {
-            if (input.mapText === undefined) {
-                text = consttxt;
-            } else if (input.mapText && input.mapText.length === 1) {
-                md.appendMarkdown(`${input.mapText[0].text}` + '\n\n');
-                example = input.mapText[0]?.example;
-                example && md.appendCodeblock(example, 'less');
-            } else if (input.mapText && input.mapText.length > 1) {
-                let count = 1;
-                for (const item of input.mapText) {
-                    md.appendMarkdown(`### [这是同名的第 ${count++} 个注释]\n\n${item.text}` + '\n\n');
-                    if (item.example) {
-                        example += `${item.example}\n`;
-                        md.appendCodeblock(item.example, 'less');
+        const mixinExecuror = {
+            example: function (annotation: annotationBlock, i: number) {
+                let a = 0;
+                const annotationBlock = annotation[i];
+                const parts = annotationBlock.text.split(" ", 2);
+                let cleanCode = parts[1] || "";
+                if (!cleanCode) {
+                    if (annotation[i + 1] && !annotation[i + 1].text.endsWith("@")) {
+                        cleanCode = annotation[i + 1].text.trim();
+                        a++;
+                    } else {
+                        md.appendMarkdown(parts[0]);
+                        return 1;
                     }
                 }
+                md.appendMarkdown(parts[0]);
+                md.appendCodeblock(cleanCode, "less");
+                return a;
+            }
+        };
+        const mdAppendQueuebeta = (annotation: annotationBlock) => {
+            for (let i = 0; i < annotation.length; i++) {
+                const annotationBlock = annotation[i];
+                if (annotationBlock.type === "@example") {
+                    i += mixinExecuror.example(annotation,i);
+                } else {
+                    md.appendMarkdown(annotationBlock.text + '\n\n');
+                }
+            }
+        };
+        if (input.currentMode === '2') {
+            if (input.mapText === undefined) {
+                md.appendMarkdown(consttxt);
+            } else if (input.mapText && input.mapText.length === 1) {
+                input.mapText.forEach(annotation => {
+                    mdAppendQueuebeta(annotation);
+                });
+            } else if (input.mapText && input.mapText.length > 1) {
+                let count = 1;
+                input.mapText.forEach(annotation => {
+                    md.appendMarkdown(`### [这是同名的第 ${count++} 个注释]\n\n`);
+                    mdAppendQueuebeta(annotation);
+                });
             }
         } else if (input.currentMode === '1') {
             if (input.realtimetext === null) {
-                text = consttxt;
+                md.appendMarkdown(consttxt);
             } else if (input.realtimetext) {
-                text = input.realtimetext.text;
-                example = input.realtimetext.example;
+                mdAppendQueuebeta(input.realtimetext);
             }
         }
         return md;
-    }
-    static createStyledHover(mixinName: string, docText: string | null, codeSnippet?: string): vscode.MarkdownString {
-        const md = new vscode.MarkdownString();
-        md.supportHtml = true; // 开启 HTML 支持，用于微调样式
-        md.isTrusted = true;   // 信任内容，允许运行部分安全指令
-        // --- 1. 顶部标题 (Mixin 名字) ---
-        md.appendMarkdown(`<h2 style="font-size:1.5em;">${mixinName}</h2>\n\n`);
-        // --- 2. 处理 JSDoc 文本 (解析并美化) ---
-        if (docText) {
-            md.appendMarkdown(docText + '\n\n');
-        }
-        // --- 3. 底部源码片段 (可选) ---
-        // 只有当你确实想展示 Mixin 的定义代码时才加这一段
-        // 使用 'scss' 或 'less' 语言标识符来获得语法高亮
-        if (codeSnippet) {
-            md.appendCodeblock(codeSnippet, 'less');
-        }
-        return md;
-    }
-    static getUserCustomSetings() {
-        const userObj: userCustomObjArray = this.DEFAULT_JSDOS;
-        const userConfigs = vscode.workspace.getConfiguration("MixinHelper").get("userCustomComments") || {};
-        for (const [trigger, rules] of Object.entries(userConfigs)) {
-            if (!trigger.startsWith("@")) { continue; }
-            if (!userObj[trigger]) { userObj[trigger] = []; }
-            userObj[trigger] = [...rules];
-
-        }
-        // console.log(`[调试] ${JSON.stringify(userObj, null, 2)}`);
-        return userObj;
     }
     /**
      * [纯工具] JSDoc 标签格式化器
@@ -507,14 +503,12 @@ class utils {
      * @param {string} part - 待格式化的单行文本片段
      * @returns {string} 格式化后的 Markdown 字符串
      */
-    static formatJSDocLine(part: string, userCustom: userCustomObjArray = utils.DEFAULT_JSDOS) {
+    static formatJSDocLine(part: string, userCustom: userCustomObjArray = DEFAULT_JSDOS): annotationLine {
         const processParts = (parts: string[], rules: string[]) => {
             let phaseI: string[] = [];
             for (let i = 0; i < parts.length; i++) {
                 const text = parts[i];
-                const met = parts[0] === "@example" && i > 0
-                    ? "null"
-                    : rules[i];
+                const met = rules[i];
                 // console.log(`[调试] ${met}`);
                 if (met && met in utils.DEFAULT_DICTIONARY) {
                     const result = utils.DEFAULT_DICTIONARY[met as keyof typeof utils.DEFAULT_DICTIONARY](text);
@@ -525,24 +519,31 @@ class utils {
             }
             const phaseII = phaseI
                 .join(' ');
-            console.log(`[调试] ${phaseII}`);
-            return phaseII;
+            // console.log(`[调试] ${phaseII}`);
+            const phaseIII: annotationLine = {
+                text: phaseII,
+                type: p0
+            };
+            return phaseIII;
         };
-        const parts = part ? part.trim().split(/\s+/) : [];
-        const p0 = parts[0];
-        // formatRulse 返回 @param 
-        let activeRules: string[] | undefined = userCustom[p0];
-        if (!activeRules && p0.startsWith("@")) {
-            console.log(`[调试][error] 未找到标签 '${p0}'，使用 'default' 代替 `);
-            activeRules = userCustom["default"];
+        if (!part.startsWith("@")) {
+            return {
+                text: part,
+                type: "plainText"
+            };
         }
+        const parts = part ? part.trim().split(/\s+/) : [];
+        // 如果 p0 = @param
+        const p0 = parts[0];
+        // 那么 activeRules 返回 @param 
+        const activeRules: string[] | undefined = userCustom[p0];
         if (activeRules) {
             return processParts(parts, activeRules);
         } else {
-            return part;
+            // console.log(`[调试][error] 未找到标签 '${p0}'，使用 'default' 代替 `);
+            return processParts(parts, userCustom["default"]);
         }
     }
-
 }
 class strategySplitter {
     private executionGoals: utils;
@@ -639,7 +640,7 @@ class processor {
      * @param currentLineIndex 当前鼠标所在的行号 (用于跳过自身)
      * @return 提取所在的行号，如果没找到则返回 undefined
      */
-    findMixinDefinition(mixinName: string, currentLineIndex: number): number | undefined {
+    findMixinDefinition(mixinName: string, currentLineIndex: number): string[] | undefined {
         // 1. 构建正则：转义特殊字符，并匹配紧跟的左括号 (允许中间有空格)
         // 比如名字是 .box，正则会匹配 .box( 或 .box (
         const escapedName = mixinName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -647,13 +648,14 @@ class processor {
         // .*? 表示“非贪婪匹配”，会尽快找到第一个 (
         const regex = new RegExp(`${escapedName}.*?\\(`);
         // 2. 从当前行的上一行开始，倒序遍历整个文档
+        const util = new utils(this.document);
         for (let i = currentLineIndex; i >= 0; i--) {
             const lineText = this.document.lineAt(i).text.trim();
             // 3. 初步匹配：看这行有没有 "名字("
             if (regex.test(lineText)) {
                 let existingLtem = false;
                 for (let input = i; ;) {
-                    const output = new utils(this.document).validateMixin(input);
+                    const output = util.validateMixin(input);
                     if (output) { existingLtem = true; break; }
                     else { break; }
                 }
@@ -662,7 +664,8 @@ class processor {
                     // const paramsString = this.extractMixinParams(i);
                     // console.log(`找到定义在第 ${i} 行，参数为: [${paramsString}]`);
                     // 3. 继续执行原本的注释搜索逻辑...
-                    return i;
+                    const final = util.getJSDocCommentbeta(i);
+                    return final ? final : undefined;
                 }
             }
         }
@@ -713,45 +716,12 @@ class processor {
         // 兜底：如果没有找到完整的参数对，返回空字符串或原始累积文本供后续判断
         return "";
     }
-    /** 获取指定行上方的文档注释 (JSDoc 风格)
-     * @param definitionLineIndex Mixin 定义所在的行号
-     * @returns 提取出的纯文本注释内容，如果没有找到则返回 null
-     * @example getDocCommentAbove()
-     */
-    getDocCommentAbove(definitionLineIndex: number): commentTextoutput | null {
-        // 1. 从定义行的上一行开始倒序遍历
-        for (let i = definitionLineIndex - 1; i >= 0; i--) {
-            const lineText = this.document.lineAt(i).text.trim();
-            // 2. 终止条件：如果遇到空行，或者遇到了代码符号（如 '}'），说明注释区域结束了
-            if (lineText === '' || lineText.startsWith('}')) { break; }
-            // 3. 识别结束标记 '*/'
-            if (lineText.endsWith('*/')) {
-                let phaseI: string[] = [];
-                // 继续向上寻找开始的 '/*'
-                for (let j = i; j >= 0; j--) {
-                    const prevLine = this.document.lineAt(j).text.trim();
-                    phaseI.unshift(prevLine); // 放入数组头部，保持顺序
-                    // 4. 识别开始标记 '/*'
-                    if (prevLine.startsWith('/*')) {
-                        // 5. 清洗数据：去掉 /*, */, * 以及首尾空格
-                        const phaseII = phaseI
-                            .map(line => line.replace(/\/\*|\*\/|\*/g, '').trim()) // 正则去除注释符号
-                            .filter(line => line !== '') // 过滤掉空行
-                            .join('\n\n'); // 用换行符拼接
-                        const phaseIII = utils.formatDocStringToMd(phaseII);
-                        return phaseIII;
-                    }
-                }
-            }
-        }
-        return null; // 没找到
-    }
     /** 全局查找 Mixin 名字的函数map版本  
      * 核心逻辑：扫描整个文档，找到所有可能的 Mixin 定义，并把它们的名字和注释内容存到一个 Map 里
      * @param document 当前文档
      * @returns key 是 Mixin 名字，value 是注释内容
      */
-    globalSearch(): Record<string, commentTextoutput[] | undefined> | undefined {
+    globalSearchbeta(): FileAnnotationContext {
         const a = this.document.lineCount;
         const util = new utils(this.document);
         const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
@@ -775,57 +745,7 @@ class processor {
                 foundCount++;
             }
         }
-        //console.log(phaseI);
-        const map: Record<string, commentTextoutput[] | undefined> = {};
-        phaseI.forEach(i => {
-            const lineText = this.document.lineAt(i).text;
-            const match = lineText.match(/^\.?([a-zA-Z0-9_-]+)\s*\(/);
-            const key = match ? match[1] : lineText.trim();
-            const output: commentTextoutput | null = this.getDocCommentAbove(i);
-            if (!output) { return; }
-            const val: commentTextoutput = {
-                text: output.text,
-                example: output?.example || undefined
-            };
-            if (!map[key]) {
-                map[key] = [val];
-            } else {
-                map[key].push(val);
-            }
-        });
-        console.log(map);
-        // map ===================
-        // 2-1 key ↘
-        //   3-1 数组的最终层val ←
-        //   3-2 数组的第2个 val
-        return map;
-    }
-    globalSearchbeta()/*: Record<string, commentTextoutput[] | undefined> | undefined */ {
-        const a = this.document.lineCount;
-        const util = new utils(this.document);
-        const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
-        const percent = Math.min(Math.max(maxPercentage, 0), 100);
-        const limit = percent !== 0
-            ? Math.floor(a * (percent / 100))
-            : a;
-        const scanLimit = maxMixinCount;
-        const utilspatcher = new strategySplitter(util, troubleshootingMode);
-        let phaseI = [];
-        // console.log(a);
-        for (let i = 0, foundCount = 0;
-            i < limit && (scanLimit === 0 || foundCount < scanLimit);
-            i++
-        ) {
-            const phaseII = utilspatcher.trigger({ line: i });
-            if (!phaseII) { continue; }
-            const output = util.validateMixin(i);
-            if (output) {
-                phaseI.push(i);
-                foundCount++;
-            }
-        }
-        const map: Record<string, commentTextoutput[] | undefined> = {};
-        const aa = utils.getUserCustomSetings();
+        const map: FileAnnotationContext = {};
         phaseI.forEach(i => {
             let final = [];
             let l = "";
@@ -833,37 +753,22 @@ class processor {
             if (!rawCom) { return; }
             for (let i = 0; i < rawCom.length; i++) {
                 const parsed = rawCom[i];
-                if (parsed.startsWith("@example")) {
-                    // final.push("@example");
-                    const nextLine = rawCom[i + 1];
-                    if (nextLine && !nextLine.trim().startsWith("@")) {
-                        l = nextLine.trim();
-                        i++;
-                    } else {
-                        l = parsed.substring("@example".length).trimStart();
-                    }
-                    // continue;
-                }
-                const interim = utils.formatJSDocLine(parsed,aa);
+                const interim = utils.formatJSDocLine(parsed, USER_JSDOS);
                 final.push(interim);
             }
-            const resultText = final.join('\n\n');
+            const resultText = final;//.join('\n\n');
             const lineText = this.document.lineAt(i).text;
             const match = lineText.match(/^\.?([a-zA-Z0-9_-]+)\s*\(/);
             const key = match ? match[1] : lineText.trim();
-            const val: commentTextoutput = {
-                text: resultText,
-                example: l || undefined
-            };
             if (!map[key]) {
-                map[key] = [val];
+                map[key] = [resultText];
             } else {
-                map[key].push(val);
+                map[key].push(resultText);
             }
         });
+        // console.log(JSON.stringify(map, null, 2));
         console.log(map);
-        // return map;
-        currentFileContext = map;
+        return map;
     }
     /**
      * @description 将杂乱的输入源清洗并融合...
@@ -871,10 +776,9 @@ class processor {
      * @param input.text - 注释文本内容
      * @returns {vscode.Hover} - 返回最后组装好的内容
      */
-    createHoverObject(input: annotationProcessingRequest): vscode.Hover {
+    createHoverObjectbeta(input: annotationProcessingRequestbeta): vscode.Hover {
         // console.log('[调试] 当前注释:', input.docText);
-        const phaseI = utils.porcessRawDocs(input.annotationContext, input.mixinName);
-        // const phaseII = utils.createStyledHover(input.mixinName, phaseI.text, phaseI.example);
+        const phaseI = utils.porcessRawDocsbeta(input.annotationContext, input.mixinName);
         const range = this.document.lineAt(input.position.line).range;
         // 4. 创建 Hover 实例
         // 第一个参数是内容，第二个参数是显示的矩形范围（决定鼠标放哪里才显示）
@@ -887,14 +791,12 @@ class processor {
  * 包工头，负责把大目标拆成几个小步骤，按顺序挨个调用底层任务，并兜底返回最终结果。 */
 class searchExecutor {
     private document: vscode.TextDocument;
-
     constructor(
         document: vscode.TextDocument,
     ) {
         this.document = document;
     }
-    // @log
-    map(position: vscode.Position): vscode.Hover | undefined {
+    mapbeta(position: vscode.Position): vscode.Hover | undefined {
         // PhaseI 1-1 ID ↘
         // PhaseII  2-1 set 方式 val ↘
         // PhaseIII   3-1 数组的最终层 ←
@@ -915,17 +817,17 @@ class searchExecutor {
         // 既然你要构建完整的 Key，建议直接用 match[0]，或者手动拼接
         const key = match[1];
         if (!key) { return undefined; }
-        const phaseIII = currentFileContext?.[key];// Phase 1
+        const phaseIII = currentFileContextbeta?.[key];// Phase 1
         if (!phaseIII) { return undefined; }
-        const APR: annotationProcessingRequest = {
+        const APR: annotationProcessingRequestbeta = {
             position: position,
-            mixinName: `.${key}`,
+            mixinName: key,
             annotationContext: {
                 currentMode: '2',
                 mapText: phaseIII
             }
         };
-        const finalText = toolkit.createHoverObject(APR);
+        const finalText = toolkit.createHoverObjectbeta(APR);
         return finalText;//Phase 3
     }
     /** 核心业务逻辑：非map的函数逻辑
@@ -945,18 +847,23 @@ class searchExecutor {
             if (!nextChar) { return undefined; }
             // 1. 获取这个单词的文本
             const wordText = this.document.getText(wordRange);
-            const definitionLineIndex = toolkit.findMixinDefinition(wordText, position.line);
-            if (definitionLineIndex !== undefined) {
-                const phaseI = toolkit.getDocCommentAbove(definitionLineIndex);
-                const APR: annotationProcessingRequest = {
+            const rawCom = toolkit.findMixinDefinition(wordText, position.line);
+            if (rawCom !== undefined) {
+                let final = [];
+                for (let i = 0; i < rawCom.length; i++) {
+                    const parsed = rawCom[i];
+                    const interim = utils.formatJSDocLine(parsed);
+                    final.push(interim);
+                }
+                const APR: annotationProcessingRequestbeta = {
                     position: position,
                     mixinName: wordText,
                     annotationContext: {
                         currentMode: '1',
-                        realtimetext: phaseI
+                        realtimetext: final
                     }
                 };
-                const commentContent = toolkit.createHoverObject(APR);
+                const commentContent = toolkit.createHoverObjectbeta(APR);
                 return commentContent;
             } else {
                 console.log(`[调试][error] 未找到该 Mixin 的定义`);
@@ -966,6 +873,9 @@ class searchExecutor {
             console.error("错误堆栈", error);
         }
     }
+    /**
+     * @param source 'switch'第一次启动除外/'open'第一次启动
+     */
     handleDocumentUpdate(source: string, cacheManager: CacheManager) {
         try {
             const editor = vscode.window.activeTextEditor;
@@ -985,17 +895,17 @@ class searchExecutor {
             }
             // 0.0.3.4? 还是 0.0.4?新增 先尝试读取缓存
             let map = cacheManager.readCache(docId);
-            const Toolkit = new processor(doc);
             if (!map) {
                 // 更新 Map
                 console.log(`[调试] 执行全量扫描...`);
-                map = Toolkit.globalSearch();
+                const Toolkit = new processor(doc);
+                map = Toolkit.globalSearchbeta();
                 if (map) {
                     lookup.set(docId, map);
-                    currentFileContext = map;
+                    currentFileContextbeta = map;
                     cacheManager.writeCache(docId, map);
                 }
-            } else { lookup.set(docId, map); currentFileContext = map; }
+            } else { lookup.set(docId, map); currentFileContextbeta = map; }
         } catch (error) { console.error("错误堆栈", error); }
     }
 }
@@ -1047,7 +957,7 @@ class dispatcher {
             },
             'map': (ctx: taskConstext) => {
                 if (ctx.position !== undefined) {
-                    const a = this.executionGoals.map(ctx.position);
+                    const a = this.executionGoals.mapbeta(ctx.position);
                     return a;
                 } else {
                     console.log("[调试][error] Map模式缺少必要参数: position");
@@ -1063,7 +973,6 @@ class dispatcher {
         return undefined;
     }
 }
-
 function cleanupLookup() {
     lookup?.clear();
 }

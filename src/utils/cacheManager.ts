@@ -111,7 +111,7 @@ export class CacheManager {
                 'utf-8'
             );
 
-            console.log(`💾 缓存已保存: ${docId}`);
+            console.log(`[调试] 缓存已保存: ${docId}`);
             return true;
 
         } catch (error) {
@@ -128,7 +128,7 @@ export class CacheManager {
             const cachePath = this.getCachePath(docId);
             if (fs.existsSync(cachePath)) {
                 fs.unlinkSync(cachePath);
-                console.log(`缓存已清除: ${docId}`);
+                console.log(`[调试] 缓存已清除: ${docId}`);
             }
         } catch (error) {
             console.error(`缓存清除失败: ${error}`);
