@@ -16,18 +16,18 @@ export interface advancedmixinConfig {
     troubleshootingMode: string,
 }
 // ==================
-/** annotationLine 注释行 */
+/** annotationLine 注释行 行一行的注释 */
 export interface annotationLine {
     text: string,
     type: string,
     rawLine?: number
 }
-/** annotationBlock 注释块 */
+/** annotationBlock 注释块 由几条注释行组成一个完整的注释 */
 export type annotationBlock = annotationLine[]
-/** FileAnnotationContext 文件注释 */
+/** FileAnnotationContext 文件注释 通常mixin注释可以重名 所以这里就使用数组 */
 export type FileAnnotationContext = Record<string, annotationBlock[]>
 /** workspaceAnnotationMap 工作区注释 */
-export type workspaceAnnotationMap = Map<string, Record<string, FileAnnotationContext[] | undefined>>;
+export type workspaceAnnotationMap = Map<string, FileAnnotationContext>;
 // ==================
 export interface annotationContextbeta {
     currentMode: string,

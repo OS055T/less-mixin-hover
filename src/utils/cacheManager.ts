@@ -2,6 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as vscode from "vscode";
+import {
+    annotationLine,
+    annotationBlock,
+    FileAnnotationContext,
+    workspaceAnnotationMap
+} from "./index";
 interface CacheMetadata {
     docId: string;                      // 文件路径
     timeStamp: number;                  // 缓存生成时间    
@@ -62,7 +68,7 @@ export class CacheManager {
      */
     public readCache(
         docId: string,
-    ): Record<string, any> | undefined {
+    ): FileAnnotationContext | undefined {
         try {
             const cachePath = this.getCachePath(docId);
 
@@ -80,7 +86,7 @@ export class CacheManager {
             return cacheEntry.data;
 
         } catch (error) {
-            console.error(`缓存读取失败: ${error}`);
+            console.error(`[调试][error]缓存读取失败: ${error}`);
             return undefined;
         }
     }
@@ -111,11 +117,11 @@ export class CacheManager {
                 'utf-8'
             );
 
-            console.log(`[调试] 缓存已保存: ${docId}`);
+            console.log(`[调试] 当前文件已保存缓存: ${docId}`);
             return true;
 
         } catch (error) {
-            console.error(`缓存写入失败: ${error}`);
+            console.error(`[调试][error] 缓存写入失败: ${error}`);
             return false;
         }
     }
@@ -131,7 +137,7 @@ export class CacheManager {
                 console.log(`[调试] 缓存已清除: ${docId}`);
             }
         } catch (error) {
-            console.error(`缓存清除失败: ${error}`);
+            console.error(`[调试][error] 缓存清除失败: ${error}`);
         }
     }
 
@@ -143,10 +149,10 @@ export class CacheManager {
             if (fs.existsSync(this.cacheDir)) {
                 fs.rmSync(this.cacheDir, { recursive: true, force: true });
                 this.ensureCacheDir();
-                console.log(`🗑️ 所有缓存已清除`);
+                console.log(`[调试] 所有缓存已清除`);
             }
         } catch (error) {
-            console.error(`批量清除缓存失败: ${error}`);
+            console.error(`[调试][error] 批量清除缓存失败: ${error}`);
         }
     }
 

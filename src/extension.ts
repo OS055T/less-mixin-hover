@@ -24,8 +24,10 @@ import {
 import {
     LogPerformance
 } from "./utils/index";
-const lookup: workspaceAnnotationMap = new Map<string, Record<string, FileAnnotationContext[] | undefined>>();
-let currentFileContextbeta: FileAnnotationContext = {};
+// L3
+const globalCache: workspaceAnnotationMap = new Map<string, FileAnnotationContext>();
+// L2
+let activeCache: FileAnnotationContext = {};
 let featurePack: vscode.Disposable | undefined;
 /**
  * 【注意事项】
@@ -139,62 +141,48 @@ class pluginInitializer {
                 provideHover
             })
         );
+        const handleCacheOperation = async(successMsg:string) => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) { return; }
+            try {
+                const { enableNotification } = config;
+                const result = await this.handleDocumentUpdate(editor.document, "switch");
+                if (result === "L3" || result === "L4") {
+                    enableNotification !== "disableNotifications" && (
+                        messageUtils.showInfo(successMsg),
+                        enableNotification !== "popupWithoutLog" &&
+                        messageUtils.logObejct("当前缓存内容", globalCache, enableNotification)
+                    );
+                } else if (result === null) {
+                    enableNotification !== "disableNotifications" && messageUtils.showInfo("当前文件好像没有缓存? 已启用刷新Map缓存");
+                }
+            } catch (error) {
+                messageUtils.showInfo(`${error}`);
+            }
+        };
         //F1
         this.context.subscriptions.push(
+            // 刷新缓存
             vscode.commands.registerCommand("less-mixin-hover.refreshMapCache", async () => {
-                const editor = vscode.window.activeTextEditor;
-                if (!editor) { return; }
-                try {
-                    const { enableNotification } = config;
-                    const docId = editor.document.uri.fsPath;
-                    this.cacheManager.invalidateCache(docId);
-                    await new searchExecutor(editor.document).handleDocumentUpdate("switch", this.cacheManager);
-                    enableNotification !== "disableNotifications" && (
-                        messageUtils.showInfo("加载完成"),
-                        enableNotification !== "popupWithoutLog" &&
-                        messageUtils.logObejct("当前缓存内容", lookup, enableNotification)
-                    );
-                } catch (error) {
-                    messageUtils.showInfo(`${error}`);
-                }
+                handleCacheOperation("已刷新缓存内容");
             }),
             // 加载缓存
             vscode.commands.registerCommand('less-mixin-hover.loadCurrentFileCache', async () => {
-                const editor = vscode.window.activeTextEditor;
-                if (!editor) { return; }
-                try {
-                    const { enableNotification } = config;
-                    const docId = editor.document.uri.fsPath;
-                    const map = this.cacheManager.readCache(docId);
-                    if (map) {
-                        lookup.set(docId, map);
-                        currentFileContextbeta = map;
-                        enableNotification !== "disableNotifications" && (
-                            messageUtils.showInfo("当前文件缓存已加载"),
-                            enableNotification !== "popupWithoutLog" &&
-                            messageUtils.logObejct("当前文件缓存", lookup, enableNotification)
-                        );
-                    } else {
-                        await new searchExecutor(editor.document).handleDocumentUpdate("switch", this.cacheManager);
-                        enableNotification !== "disableNotifications" && messageUtils.showInfo("当前文件好像没有缓存? 已启用刷新Map缓存");
-                    }
-                } catch (error) {
-                    messageUtils.showInfo(`${error}`);
-                }
+                handleCacheOperation("当前文件缓存已加载");
             }),
             // 清空内存
             vscode.commands.registerCommand("less-mixin-hover.clearAllCache", async () => {
+                cleanupLookup();
                 this.cacheManager.clearAllCache();
-                lookup.clear();
-                currentFileContextbeta = {};
                 config.enableNotification !== "disableNotifications" && messageUtils.showInfo("所有缓存已清除");
             }),
             // Debug
             vscode.commands.registerCommand("less-mixin-hover.Debug", async () => {
                 const editor = vscode.window.activeTextEditor;
                 if (!editor) { return; }
-                new searchExecutor(editor?.document).handleDocumentUpdate("switch", this.cacheManager);
-                console.log(currentFileContextbeta);
+                this.handleDocumentUpdate(editor.document, "switch");
+                // new searchExecutor(editor?.document).handleDocumentUpdate("switch", this.cacheManager);
+                // console.log(activeCache);
                 // const editor = vscode.window.activeTextEditor;
                 // if (!editor) { return; }
                 // const docId = editor.document.uri.fsPath;
@@ -221,22 +209,18 @@ class pluginInitializer {
         // 2. 注册新的监听器
         //map订阅监听器    
         if (config.searchMode === "map") {
-            const handleMapTrigger = (doc: vscode.TextDocument, sourceType: string = "switch") => {
-                new searchExecutor(doc).handleDocumentUpdate(sourceType, this.cacheManager);
-            };
             //触发I打开文件
             if (config.syncMapOnOpen) {
                 disposable.push(vscode.workspace.onDidOpenTextDocument((doc) => {
-                    if (config.searchMode !== "map") { return; };
                     console.log("[调试] 触发I打开文件");
-                    handleMapTrigger(doc, "open");
+                    this.handleDocumentUpdate(doc, "open");
                 }));
             }
             //触发II保存文件
             if (config.syncMapOnSave) {
                 disposable.push(vscode.workspace.onDidSaveTextDocument((doc) => {
                     console.log("[调试] 触发II保存文件");
-                    handleMapTrigger(doc);
+                    this.handleDocumentUpdate(doc);
                 }));
             }
             //触发III切换文件
@@ -244,12 +228,7 @@ class pluginInitializer {
                 disposable.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
                     if (editor && editor.document) {
                         console.log("[调试] 触发III切换文件");
-                        const path = editor.document.uri.fsPath;
-                        if (!lookup.has(path)) {
-                            handleMapTrigger(editor.document);
-                        } else {
-                            currentFileContextbeta = lookup.get(path) ?? {} as any;
-                        }
+                        this.handleDocumentUpdate(editor.document);
                     }
                 }));
             }
@@ -262,6 +241,58 @@ class pluginInitializer {
             this.context.subscriptions.push(featurePack);
         } else {
             featurePack = undefined;
+        }
+    }
+    /**
+     * 统一的数据获取入口
+     * @param doc 当前文档对象
+     * @param source 'switch'第一次启动除外/'open'第一次启动
+     */
+    private async handleDocumentUpdate(doc: vscode.TextDocument, source: string = "switch") {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) { return; }
+        let b = '';
+        if (source === 'switch') { b = doc.languageId; }
+        else if (source === 'open') { b = editor.document.languageId; }
+        if (!['less'].includes(b)) { return; }
+        let filePath = doc.uri.fsPath;
+        if (source === 'switch') {
+            filePath = doc.uri.fsPath;
+        } else if (source === 'open') {
+            doc = editor.document;
+            filePath = editor.document.fileName;
+        }
+
+        // 如果 L3 有，返回，顺便更新 L2 (当前激活缓存)
+        if (globalCache.has(filePath)) {
+            console.log("[调试][命中 L3] 从全局缓存恢复...");
+            const data = globalCache.get(filePath);
+            activeCache = data!; // 更新 L2 引用
+            return "L3";
+        }
+
+        // === 2. 检查 L4 (本地数据库) ===
+        let data = this.cacheManager.readCache(filePath);
+        if (data) {
+            console.log("[调试][命中 L4] 从磁盘读取成功，回填内存...");
+            // 回填 L3
+            globalCache.set(filePath, data);
+            // 回填 L2
+            activeCache = data;
+            return "L4";
+        } else {
+            // === 3. L4 也没有 -> 重新扫描 (最坏情况) ===
+            console.log("[调试][未命中] 开始全量扫描文件...");
+            data = new processor(doc).globalSearchbeta();
+            if (data) {
+                // 写入 L3
+                globalCache.set(filePath, data);
+                // 写入 L2
+                activeCache = data;
+                // 写入 L4 
+                this.cacheManager.writeCache(filePath, data);
+                return null;
+            }
         }
     }
 }
@@ -438,7 +469,22 @@ class utils {
         // --- 1. 顶部标题 (Mixin 名字) ---
         md.appendMarkdown(`<h2 style="font-size:1.5em;">${mixinName}</h2>\n\n`);
         const mixinExecuror = {
-            example: function (annotation: annotationBlock, i: number) {
+            hendlers: {
+                "@example": "handleexample",
+            },
+            mdAppendQueue: function (annotation: annotationBlock) {
+                for (let i = 0; i < annotation.length; i++) {
+                    const block = annotation[i];
+                    const type = block.type;
+                    if (this.hendlers[type as keyof typeof this.hendlers]) {
+                        const metnodName = this.hendlers[type as keyof typeof this.hendlers];
+                        i += (this as any)[metnodName](annotation, i);
+                    } else {
+                        md.appendMarkdown(block.text + '\n\n');
+                    }
+                }
+            },
+            handleexample: function (annotation: annotationBlock, i: number) {
                 let a = 0;
                 const annotationBlock = annotation[i];
                 const parts = annotationBlock.text.split(" ", 2);
@@ -457,35 +503,25 @@ class utils {
                 return a;
             }
         };
-        const mdAppendQueuebeta = (annotation: annotationBlock) => {
-            for (let i = 0; i < annotation.length; i++) {
-                const annotationBlock = annotation[i];
-                if (annotationBlock.type === "@example") {
-                    i += mixinExecuror.example(annotation,i);
-                } else {
-                    md.appendMarkdown(annotationBlock.text + '\n\n');
-                }
-            }
-        };
         if (input.currentMode === '2') {
             if (input.mapText === undefined) {
                 md.appendMarkdown(consttxt);
             } else if (input.mapText && input.mapText.length === 1) {
                 input.mapText.forEach(annotation => {
-                    mdAppendQueuebeta(annotation);
+                    mixinExecuror.mdAppendQueue(annotation);
                 });
             } else if (input.mapText && input.mapText.length > 1) {
                 let count = 1;
                 input.mapText.forEach(annotation => {
                     md.appendMarkdown(`### [这是同名的第 ${count++} 个注释]\n\n`);
-                    mdAppendQueuebeta(annotation);
+                    mixinExecuror.mdAppendQueue(annotation);
                 });
             }
         } else if (input.currentMode === '1') {
             if (input.realtimetext === null) {
                 md.appendMarkdown(consttxt);
             } else if (input.realtimetext) {
-                mdAppendQueuebeta(input.realtimetext);
+                mixinExecuror.mdAppendQueue(input.realtimetext);
             }
         }
         return md;
@@ -721,7 +757,7 @@ class processor {
      * @param document 当前文档
      * @returns key 是 Mixin 名字，value 是注释内容
      */
-    globalSearchbeta(): FileAnnotationContext {
+    globalSearchbeta(): FileAnnotationContext | undefined {
         const a = this.document.lineCount;
         const util = new utils(this.document);
         const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
@@ -745,10 +781,10 @@ class processor {
                 foundCount++;
             }
         }
+        if (!phaseI) { return; }
         const map: FileAnnotationContext = {};
         phaseI.forEach(i => {
             let final = [];
-            let l = "";
             const rawCom = util.getJSDocCommentbeta(i);
             if (!rawCom) { return; }
             for (let i = 0; i < rawCom.length; i++) {
@@ -817,7 +853,7 @@ class searchExecutor {
         // 既然你要构建完整的 Key，建议直接用 match[0]，或者手动拼接
         const key = match[1];
         if (!key) { return undefined; }
-        const phaseIII = currentFileContextbeta?.[key];// Phase 1
+        const phaseIII = activeCache?.[key];// Phase 1
         if (!phaseIII) { return undefined; }
         const APR: annotationProcessingRequestbeta = {
             position: position,
@@ -872,41 +908,6 @@ class searchExecutor {
         } catch (error) {
             console.error("错误堆栈", error);
         }
-    }
-    /**
-     * @param source 'switch'第一次启动除外/'open'第一次启动
-     */
-    handleDocumentUpdate(source: string, cacheManager: CacheManager) {
-        try {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) { return; }
-            let b = '';
-            if (source === 'switch') { b = this.document.languageId; }
-            else if (source === 'open') { b = editor.document.languageId; }
-            if (!['less', 'css', 'scss'].includes(b)) { return; }
-            let doc: vscode.TextDocument = this.document;
-            let docId = '';
-            if (source === 'switch') {
-                doc = this.document;
-                docId = this.document.uri.fsPath;
-            } else if (source === 'open') {
-                doc = editor.document;
-                docId = editor.document.fileName;
-            }
-            // 0.0.3.4? 还是 0.0.4?新增 先尝试读取缓存
-            let map = cacheManager.readCache(docId);
-            if (!map) {
-                // 更新 Map
-                console.log(`[调试] 执行全量扫描...`);
-                const Toolkit = new processor(doc);
-                map = Toolkit.globalSearchbeta();
-                if (map) {
-                    lookup.set(docId, map);
-                    currentFileContextbeta = map;
-                    cacheManager.writeCache(docId, map);
-                }
-            } else { lookup.set(docId, map); currentFileContextbeta = map; }
-        } catch (error) { console.error("错误堆栈", error); }
     }
 }
 /** 核心调度器 
@@ -974,7 +975,8 @@ class dispatcher {
     }
 }
 function cleanupLookup() {
-    lookup?.clear();
+    globalCache?.clear();
+    activeCache = {};
 }
 export function deactivate() {
     cleanupLookup();
