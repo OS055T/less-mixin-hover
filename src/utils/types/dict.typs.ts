@@ -29,13 +29,8 @@ export type FileAnnotationContext = Record<string, annotationBlock[]>
 /** workspaceAnnotationMap 工作区注释 */
 export type workspaceAnnotationMap = Map<string, FileAnnotationContext>;
 // ==================
-export interface annotationContextbeta {
-    currentMode: string,
-    realtimetext?: annotationBlock | null,
-    mapText?: annotationBlock[] | undefined
-}
-export interface annotationProcessingRequestbeta {
+export interface annotationProcessingRequest {
     position: vscode.Position,
     mixinName: string,
-    annotationContext: annotationContextbeta,
+    annotationContext: annotationBlock[] | undefined
 }

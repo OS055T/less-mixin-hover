@@ -14,8 +14,7 @@ import {
     workspaceAnnotationMap
 } from "./utils/index";
 import {
-    annotationContextbeta,
-    annotationProcessingRequestbeta
+    annotationProcessingRequest
 } from "./utils/index";
 import {
     mixinConfig,
@@ -108,9 +107,9 @@ class pluginInitializer {
         }
         console.log("[调试] 环境就绪,开始同步 MAP...");
         configManager.trigger();
-        // const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
-        // console.log(`[调试] 基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
-        // console.log(`[调试] 高级设置 最大百分比: ${maxPercentage},最大Mixin数:${maxMixinCount},排查模式:${troubleshootingMode}`);
+        const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
+        console.log(`[调试] 基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
+        console.log(`[调试] 高级设置 最大百分比: ${maxPercentage},最大Mixin数:${maxMixinCount},排查模式:${troubleshootingMode}`);
         //设置更改
         this.context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration((e) => {
@@ -141,7 +140,7 @@ class pluginInitializer {
                 provideHover
             })
         );
-        const handleCacheOperation = async(successMsg:string) => {
+        const handleCacheOperation = async (successMsg: string) => {
             const editor = vscode.window.activeTextEditor;
             if (!editor) { return; }
             try {
@@ -178,9 +177,10 @@ class pluginInitializer {
             }),
             // Debug
             vscode.commands.registerCommand("less-mixin-hover.Debug", async () => {
-                const editor = vscode.window.activeTextEditor;
-                if (!editor) { return; }
-                this.handleDocumentUpdate(editor.document, "switch");
+                cleanupLookup();
+                // const editor = vscode.window.activeTextEditor;
+                // if (!editor) { return; }
+                // this.handleDocumentUpdate(editor.document, "switch");
                 // new searchExecutor(editor?.document).handleDocumentUpdate("switch", this.cacheManager);
                 // console.log(activeCache);
                 // const editor = vscode.window.activeTextEditor;
@@ -432,20 +432,19 @@ class utils {
     /** 获取指定行上方的文档注释 (JSDoc 风格)
      * @param definitionLineIndex Mixin 定义所在的行号
      * @returns 提取出的纯文本注释内容，如果没有找到则返回 null
-     * @example getDocCommentAbove()
      */
-    getJSDocCommentbeta(definitionLineIndex: number): string[] | null {
+    getJSDocCommentbeta(definitionLineIndex: number): string[] | undefined {
         // 1. 从定义行的上一行开始倒序遍历
-        for (let i = definitionLineIndex - 1; i >= 0; i--) {
+        for (let i = definitionLineIndex - 1, limit = 0; i >= 0 && limit < 30; i--, limit++) {
             const lineText = this.document.lineAt(i).text.trim();
-            // 2. 终止条件：如果遇到空行，或者遇到了代码符号（如 '}'），说明注释区域结束了
-            if (lineText.startsWith('}')) { break; }
+            // 2. 终止条件：如果遇到空行，或者遇到了代码符号（如 ';'），说明注释区域结束了
+            if (lineText.endsWith(';')) { break; }
             if (lineText === '') { continue; }
             // 3. 识别结束标记 '*/'
             if (lineText.endsWith('*/')) {
                 let phaseI: string[] = [];
                 // 继续向上寻找开始的 '/*'
-                for (let i2 = i; i2 >= 0; i2--) {
+                for (let i2 = i, limit = 0; i2 >= 0 && limit < 30; i2--, limit++) {
                     const prevLine = this.document.lineAt(i2).text.trim();
                     phaseI.unshift(prevLine); // 放入数组头部，保持顺序
                     // 4. 识别开始标记 '/*'
@@ -459,9 +458,9 @@ class utils {
                 }
             }
         }
-        return null; // 没找到
+        return undefined; // 没找到
     }
-    static porcessRawDocsbeta(input: annotationContextbeta, mixinName: string): vscode.MarkdownString {
+    static porcessRawDocsbeta(textBlock: annotationBlock[] | undefined, mixinName: string): vscode.MarkdownString {
         const consttxt = '貌似没有写备注哦';
         const md = new vscode.MarkdownString();
         md.supportHtml = true; // 开启 HTML 支持，用于微调样式
@@ -503,26 +502,18 @@ class utils {
                 return a;
             }
         };
-        if (input.currentMode === '2') {
-            if (input.mapText === undefined) {
-                md.appendMarkdown(consttxt);
-            } else if (input.mapText && input.mapText.length === 1) {
-                input.mapText.forEach(annotation => {
-                    mixinExecuror.mdAppendQueue(annotation);
-                });
-            } else if (input.mapText && input.mapText.length > 1) {
-                let count = 1;
-                input.mapText.forEach(annotation => {
-                    md.appendMarkdown(`### [这是同名的第 ${count++} 个注释]\n\n`);
-                    mixinExecuror.mdAppendQueue(annotation);
-                });
-            }
-        } else if (input.currentMode === '1') {
-            if (input.realtimetext === null) {
-                md.appendMarkdown(consttxt);
-            } else if (input.realtimetext) {
-                mixinExecuror.mdAppendQueue(input.realtimetext);
-            }
+        if (textBlock === undefined) {
+            md.appendMarkdown(consttxt);
+        } else if (textBlock && textBlock.length === 1) {
+            textBlock.forEach(annotation => {
+                mixinExecuror.mdAppendQueue(annotation);
+            });
+        } else {
+            let count = 1;
+            textBlock.forEach(annotation => {
+                md.appendMarkdown(`### [这是同名的第 ${count++} 个注释]\n\n`);
+                mixinExecuror.mdAppendQueue(annotation);
+            });
         }
         return md;
     }
@@ -676,7 +667,7 @@ class processor {
      * @param currentLineIndex 当前鼠标所在的行号 (用于跳过自身)
      * @return 提取所在的行号，如果没找到则返回 undefined
      */
-    findMixinDefinition(mixinName: string, currentLineIndex: number): string[] | undefined {
+    findMixinDefinition(mixinName: string, currentLineIndex: number): annotationBlock[] | undefined {
         // 1. 构建正则：转义特殊字符，并匹配紧跟的左括号 (允许中间有空格)
         // 比如名字是 .box，正则会匹配 .box( 或 .box (
         const escapedName = mixinName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -700,8 +691,18 @@ class processor {
                     // const paramsString = this.extractMixinParams(i);
                     // console.log(`找到定义在第 ${i} 行，参数为: [${paramsString}]`);
                     // 3. 继续执行原本的注释搜索逻辑...
-                    const final = util.getJSDocCommentbeta(i);
-                    return final ? final : undefined;
+                    const rawCom = util.getJSDocCommentbeta(i);
+                    let final: annotationLine[] = [];
+                    if (rawCom !== undefined) {
+                        for (let i = 0; i < rawCom.length; i++) {
+                            const parsed = rawCom[i];
+                            const interim = utils.formatJSDocLine(parsed);
+                            final.push(interim);
+                        }
+                    } else {
+                        console.log(`[调试][error] 未找到该 Mixin 的定义`);
+                    }
+                    return final.length > 1 ? [final] : undefined;
                 }
             }
         }
@@ -812,7 +813,7 @@ class processor {
      * @param input.text - 注释文本内容
      * @returns {vscode.Hover} - 返回最后组装好的内容
      */
-    createHoverObjectbeta(input: annotationProcessingRequestbeta): vscode.Hover {
+    createHoverObjectbeta(input: annotationProcessingRequest): vscode.Hover {
         // console.log('[调试] 当前注释:', input.docText);
         const phaseI = utils.porcessRawDocsbeta(input.annotationContext, input.mixinName);
         const range = this.document.lineAt(input.position.line).range;
@@ -854,14 +855,10 @@ class searchExecutor {
         const key = match[1];
         if (!key) { return undefined; }
         const phaseIII = activeCache?.[key];// Phase 1
-        if (!phaseIII) { return undefined; }
-        const APR: annotationProcessingRequestbeta = {
+        const APR: annotationProcessingRequest = {
             position: position,
             mixinName: key,
-            annotationContext: {
-                currentMode: '2',
-                mapText: phaseIII
-            }
+            annotationContext: phaseIII
         };
         const finalText = toolkit.createHoverObjectbeta(APR);
         return finalText;//Phase 3
@@ -884,27 +881,13 @@ class searchExecutor {
             // 1. 获取这个单词的文本
             const wordText = this.document.getText(wordRange);
             const rawCom = toolkit.findMixinDefinition(wordText, position.line);
-            if (rawCom !== undefined) {
-                let final = [];
-                for (let i = 0; i < rawCom.length; i++) {
-                    const parsed = rawCom[i];
-                    const interim = utils.formatJSDocLine(parsed);
-                    final.push(interim);
-                }
-                const APR: annotationProcessingRequestbeta = {
-                    position: position,
-                    mixinName: wordText,
-                    annotationContext: {
-                        currentMode: '1',
-                        realtimetext: final
-                    }
-                };
-                const commentContent = toolkit.createHoverObjectbeta(APR);
-                return commentContent;
-            } else {
-                console.log(`[调试][error] 未找到该 Mixin 的定义`);
-                return undefined;
-            }
+            const APR: annotationProcessingRequest = {
+                position: position,
+                mixinName: wordText,
+                annotationContext: rawCom
+            };
+            const commentContent = toolkit.createHoverObjectbeta(APR);
+            return commentContent;
         } catch (error) {
             console.error("错误堆栈", error);
         }
@@ -948,22 +931,22 @@ class dispatcher {
         // ==========================================
         const taskMap = {
             'realtime': (ctx: taskConstext) => {
-                if (ctx.position !== undefined) {
-                    const a = this.executionGoals.startupfunction(ctx.position);
+                // if (ctx.position !== undefined) {
+                    const a = this.executionGoals.startupfunction(ctx.position!);
                     return a;
-                } else {
-                    console.log("[调试][error] Realtime模式缺少必要参数: position");
-                    return;
-                }
+                // } else {
+                //     console.log("[调试][error] Realtime模式缺少必要参数: position");
+                //     return;
+                // }
             },
             'map': (ctx: taskConstext) => {
-                if (ctx.position !== undefined) {
-                    const a = this.executionGoals.mapbeta(ctx.position);
+                // if (ctx.position !== undefined) {
+                    const a = this.executionGoals.mapbeta(ctx.position!);
                     return a;
-                } else {
-                    console.log("[调试][error] Map模式缺少必要参数: position");
-                    return;
-                }
+                // } else {
+                //     console.log("[调试][error] Map模式缺少必要参数: position");
+                //     return;
+                // }
             },
         };
         const task = taskMap[this.currentMode as keyof typeof taskMap];
