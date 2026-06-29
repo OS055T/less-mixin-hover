@@ -35,6 +35,11 @@
         "category": "MixinHelper"
       },
       {
+        "command": "less-mixin-hover.clearL2Cache",
+        "title": "清空当前缓存",
+        "category": "MixinHelper"
+      },
+      {
         "command": "less-mixin-hover.Debug",
         "title": "调试 记得删",
         "category": "MixinHelper"
@@ -177,7 +182,8 @@
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "debug-compile": "tsc -p . --outDir out && node esbuild.js"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

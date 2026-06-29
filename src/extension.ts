@@ -173,6 +173,7 @@ class pluginInitializer {
                     const path = editor.document.uri.fsPath;
                     cleanupData.L2(path);
                     this.cacheManager.invalidateCache(path);
+                    console.log(editor);
                     handleCacheOperation("", "已刷新缓存内容");
                 }
             }),
@@ -290,7 +291,6 @@ class pluginInitializer {
             doc = editor.document;
             filePath = editor.document.fileName;
         }
-
         // 如果 L3 有，返回，顺便更新 L2 (当前激活缓存)
         if (globalCache.has(filePath)) {
             console.log("[调试][命中 L3] 从全局缓存恢复...");
@@ -298,7 +298,6 @@ class pluginInitializer {
             activeCache = data!; // 更新 L2 引用
             return "L3";
         }
-
         // === 2. 检查 L4 (本地数据库) ===
         let data = this.cacheManager.readCache(filePath);
         if (data) {
@@ -770,7 +769,7 @@ class processors {
     globalSearchbeta(): FileAnnotationContext | undefined {
         const util = new utils(this.document);
         const phaseI = util.CoarseFilterbeta();
-        if (!phaseI) { return; }
+        if (phaseI.length === 0) { return; }
         const map: FileAnnotationContext = {};
         phaseI.forEach(i => {
             const rawCom = util.getJSDocCommentbeta(i);

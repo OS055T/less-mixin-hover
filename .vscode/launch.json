@@ -16,6 +16,8 @@
 				"${workspaceFolder}/dist/**/*.js"
 			],
 			// "preLaunchTask": "${defaultBuildTask}"
+			"preLaunchTask": "Build for Debug", 
+			"internalConsoleOptions": "openOnSessionStart"
 		}
 	]
 }
