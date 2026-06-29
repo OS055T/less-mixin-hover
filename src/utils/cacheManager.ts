@@ -101,6 +101,10 @@ export class CacheManager {
         try {
             const cachePath = this.getCachePath(docId);
 
+            if (!fs.existsSync(this.cacheDir)) {
+                this.ensureCacheDir();
+            }
+            
             const cacheEntry: CacheEntry = {
                 data: mapData,
                 metadata: {
@@ -117,7 +121,7 @@ export class CacheManager {
                 'utf-8'
             );
 
-            console.log(`[调试] 当前文件已保存缓存: ${docId}`);
+            // console.log(`[调试] 当前文件已保存缓存: ${docId}`);
             return true;
 
         } catch (error) {
@@ -134,7 +138,7 @@ export class CacheManager {
             const cachePath = this.getCachePath(docId);
             if (fs.existsSync(cachePath)) {
                 fs.unlinkSync(cachePath);
-                console.log(`[调试] 缓存已清除: ${docId}`);
+                // console.log(`[调试] 缓存已清除: ${docId}`);
             }
         } catch (error) {
             console.error(`[调试][error] 缓存清除失败: ${error}`);

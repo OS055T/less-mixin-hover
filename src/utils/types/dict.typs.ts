@@ -32,5 +32,8 @@ export type workspaceAnnotationMap = Map<string, FileAnnotationContext>;
 export interface annotationProcessingRequest {
     position: vscode.Position,
     mixinName: string,
-    annotationContext: annotationBlock[] | undefined
+    annotationContext?: annotationBlock[] | undefined,
+    cachedCacheContext?: string;
 }
+// ==================
+export type cachedCache = Record<string, string>
