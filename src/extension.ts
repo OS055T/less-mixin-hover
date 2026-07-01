@@ -34,6 +34,7 @@ let activeCache: FileAnnotationContext = {};
 let cachedCache: cachedCache = {};
 // ===
 let featurePack: vscode.Disposable | undefined;
+let registration: vscode.Disposable | undefined;
 /**
  * 【注意事项】
  * - 严禁直接修改 `DEFAULT_..._MAP` 中的值，它们是只读的基准。
@@ -42,9 +43,9 @@ let featurePack: vscode.Disposable | undefined;
 // 1. 运行时状态层 (Runtime State - let ...)
 let config: mixinConfig = {
     searchMode: "map",
-    syncMapOnOpen: true,
+    syncMapOnOpen: false,
     syncMapOnSave: false,
-    syncMapOnFocus: false,
+    syncMapOnFocus: true,
     enableNotification: "logSilently",
 };
 let advancedConfig: advancedmixinConfig = {
@@ -56,9 +57,9 @@ let USER_JSDOS: userCustomObjArray = {};
 // 2. 静态常量层 (Static Defaults - const ... as const)
 const DEFAULT_CONFIG_MAP: mixinConfig = {
     searchMode: "map",
-    syncMapOnOpen: true,
+    syncMapOnOpen: false,
     syncMapOnSave: false,
-    syncMapOnFocus: false,
+    syncMapOnFocus: true,
     enableNotification: "logSilently",
 } as const;
 const DEFAULT_ADVANCED_CONFIG_MAP: advancedmixinConfig = {
@@ -74,6 +75,14 @@ const DEFAULT_JSDOS: userCustomObjArray = {
     "@description": ["italic", "preLineBreak"],
     "@example": ["italic"]
 } as const;
+const cssFunctions = [
+    'calc',
+    'var',
+    'rgb',
+    'rgba',
+    'hsl',
+    'url'
+];
 // 3. 接口定义层 (Interfaces)
 interface taskConstext {
     source?: string;
@@ -98,11 +107,17 @@ export function activate(context: vscode.ExtensionContext) {
 class pluginInitializer {
     private context: vscode.ExtensionContext;
     private cacheManager: CacheManager;  // 新增
+    private lessHoverDisposable: vscode.Disposable[];
     constructor(
         context: vscode.ExtensionContext,
     ) {
         this.context = context;
         this.cacheManager = new CacheManager(context);  // 实例化
+        this.lessHoverDisposable = [
+            vscode.languages.registerHoverProvider(("less"), {
+                provideHover
+            })
+        ];
     }
     trigger() {
         // console.log('[调试] NixinHelper 正在激活...');
@@ -110,13 +125,19 @@ class pluginInitializer {
             console.warn('[调试][error] 当前工作区未受信任,MixinHelper 将保持静默状态以确保安全。');
             return;
         }
-        console.log("[调试] 环境就绪,开始同步 MAP...");
+        // console.log("[调试] 环境就绪,开始同步 MAP...");
         configManager.trigger();
-        const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
-        console.log(`[调试] 基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
-        console.log(`[调试] 高级设置 最大百分比: ${maxPercentage},最大Mixin数:${maxMixinCount},排查模式:${troubleshootingMode}`);
-        //设置更改
-        this.context.subscriptions.push(
+        // const { maxMixinCount, maxPercentage, troubleshootingMode } = advancedConfig;
+        // console.log(`[调试] 基础设置 模式: ${config.searchMode},打开时同步:${config.syncMapOnOpen},保存时同步:${config.syncMapOnSave}`);
+        // console.log(`[调试] 高级设置 最大百分比: ${maxPercentage},最大Mixin数:${maxMixinCount},排查模式:${troubleshootingMode}`);
+        this.staticListener();
+        this.updateSubscriptions();
+    }
+    // =================
+    private staticListener() {
+        const registrations: vscode.Disposable[] = [];
+        // 设置更改
+        registrations.push(
             vscode.workspace.onDidChangeConfiguration((e) => {
                 if (!e.affectsConfiguration("MixinHelper")) { return; }
                 console.log("[调试] 触发IV设置更改");
@@ -139,33 +160,18 @@ class pluginInitializer {
                 }
             })
         );
-        //鼠标悬停
-        this.context.subscriptions.push(
-            vscode.languages.registerHoverProvider(("less"), {
-                provideHover
+        // 鼠标悬停
+        registrations.push(
+            vscode.window.onDidChangeActiveTextEditor((editor) => {
+                if (editor && !this.verify(editor.document)) {
+                    this.updateSubscriptionTemplate(registration, this.lessHoverDisposable);
+                } else {
+                    this.updateSubscriptionTemplate(registration);
+                }
             })
         );
-        const handleCacheOperation = async (successMsg: string, error?: string) => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) { return; }
-            try {
-                const { enableNotification } = config;
-                const result = await this.handleDocumentUpdate(editor.document, "switch");
-                if (result === "L3" || result === "L4") {
-                    enableNotification !== "disableNotifications" && (
-                        messageUtils.showInfo(successMsg),
-                        enableNotification !== "popupWithoutLog" &&
-                        messageUtils.logObejct("当前缓存内容", globalCache, enableNotification)
-                    );
-                } else if (result === null) {
-                    enableNotification !== "disableNotifications" && messageUtils.showInfo(error!);
-                }
-            } catch (error) {
-                messageUtils.showInfo(`${error}`);
-            }
-        };
-        //F1
-        this.context.subscriptions.push(
+        // F1
+        registrations.push(
             // 刷新缓存
             vscode.commands.registerCommand("less-mixin-hover.refreshMapCache", async () => {
                 const editor = vscode.window.activeTextEditor;
@@ -173,13 +179,12 @@ class pluginInitializer {
                     const path = editor.document.uri.fsPath;
                     cleanupData.L2(path);
                     this.cacheManager.invalidateCache(path);
-                    console.log(editor);
-                    handleCacheOperation("", "已刷新缓存内容");
+                    this.handleCacheOperation("", "已刷新缓存内容");
                 }
             }),
             // 加载缓存
             vscode.commands.registerCommand('less-mixin-hover.loadCurrentFileCache', async () => {
-                handleCacheOperation("当前文件缓存已加载", "当前文件好像没有缓存? 已启用刷新Map缓存");
+                this.handleCacheOperation("当前文件缓存已加载", "当前文件好像没有缓存? 已启用刷新Map缓存");
             }),
             // 清空内存
             vscode.commands.registerCommand("less-mixin-hover.clearAllCache", async () => {
@@ -195,18 +200,15 @@ class pluginInitializer {
                     cleanupData.L2(path);
                     config.enableNotification !== "disableNotifications" && messageUtils.showInfo("当前缓存已清除");
                 }
-            }),
-            // Debug
+            })
+        );
+        // F1 Debug
+        registrations.push( 
             vscode.commands.registerCommand("less-mixin-hover.Debug", async () => {
                 // cleanupData.All();
                 const editor = vscode.window.activeTextEditor;
                 if (!editor) { return; }
                 new utils(editor.document).CoarseFilterbeta();
-                // this.handleDocumentUpdate(editor.document, "switch");
-                // new searchExecutor(editor?.document).handleDocumentUpdate("switch", this.cacheManager);
-                // console.log(activeCache);
-                // const editor = vscode.window.activeTextEditor;
-                // if (!editor) { return; }
                 // const docId = editor.document.uri.fsPath;
                 // // 读取 Less 文件内容
                 // const lessCode = fs.readFileSync(docId, 'utf8');
@@ -226,71 +228,76 @@ class pluginInitializer {
                 // });
             }),
         );
-        this.updateSubscriptions();
+        this.context.subscriptions.push(...registrations);
     }
-    private updateSubscriptions() {
-        // 1. 【关键步骤】先销毁并清空旧的动态监听器
-        if (featurePack) { featurePack.dispose(); }
-
-        const disposable: vscode.Disposable[] = [];
+    private updateSubscriptions() {   
+        const disposable = [];
         // 2. 注册新的监听器
-        //map订阅监听器    
+        // map订阅监听器
         if (config.searchMode === "map") {
-            //触发I打开文件
+            // 触发I打开文件
             if (config.syncMapOnOpen) {
                 disposable.push(vscode.workspace.onDidOpenTextDocument((doc) => {
                     console.log("[调试] 触发I打开文件");
-                    this.handleDocumentUpdate(doc, "open");
+                    if (doc.uri.scheme !== 'file' && !this.verify(doc)) { return; }
+                    cleanupData.L2();
+                    this.handleDocumentUpdate(doc);
                 }));
             }
-            //触发II保存文件
+            // 触发II保存文件
             if (config.syncMapOnSave) {
                 disposable.push(vscode.workspace.onDidSaveTextDocument((doc) => {
                     console.log("[调试] 触发II保存文件");
-                    const editor = vscode.window.activeTextEditor;
-                    if (editor) {
-                        this.cacheManager.invalidateCache(editor.document.uri.fsPath);
-                        this.handleDocumentUpdate(doc);
-                    }
+                    if (!this.verify(doc)) { return; }
+                    this.cacheManager.invalidateCache(doc.uri.fsPath);
+                    cleanupData.L2(doc.uri.fsPath);
+                    this.handleDocumentUpdate(doc);
                 }));
             }
-            //触发III切换文件
+            // 触发III切换文件
             if (config.syncMapOnFocus) {
                 disposable.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
+                    if (editor && !this.verify(editor.document)) { return; }
                     if (editor && editor.document) {
                         console.log("[调试] 触发III切换文件");
+                        cleanupData.L2();
                         this.handleDocumentUpdate(editor.document);
                     }
                 }));
             }
         }
         console.log(`[调试] MAP准备订阅${disposable.length}个`);
-        if (disposable.length > 0) {
-            // 3. 存入临时池（用于下次更新时销毁）
-            featurePack = vscode.Disposable.from(...disposable);
-            // 4. 同时也推入 context（确保插件彻底卸载时也能被清理，双重保险）
-            this.context.subscriptions.push(featurePack);
-        } else {
-            featurePack = undefined;
+        this.updateSubscriptionTemplate(featurePack,disposable);
+    }
+    private updateSubscriptionTemplate(
+        targetContainer: vscode.Disposable | undefined,
+        targetSubscription?: vscode.Disposable[]
+    ) {
+        // 1. 【关键步骤】先销毁并清空旧的动态监听器
+        if (targetContainer) { targetContainer.dispose(); }
+        if (targetSubscription && targetSubscription.length > 0) {
+            // 2. 存入临时池（用于下次更新时销毁）
+            targetContainer = vscode.Disposable.from(...targetSubscription);
+            // 3. 同时也推入 context（确保插件彻底卸载时也能被清理，双重保险）
+            this.context.subscriptions.push(targetContainer);
         }
+    }
+    // =================
+    /**
+     * 验证文档是否为 LESS 文件
+     * @returns 是 LESS 文件返回 true，否则返回 false
+     */
+    private verify(doc: vscode.TextDocument): boolean {
+        if (!['less'].includes(doc.languageId) || !doc.fileName.endsWith('.less')) { return false; }
+        return true;
     }
     /**
      * 统一的数据获取入口
      * @param doc 当前文档对象
      * @param source 'switch'第一次启动除外/'open'第一次启动
      */
-    private async handleDocumentUpdate(doc: vscode.TextDocument, source: string = "switch") {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) { return; }
-        let b = '';
-        if (source === 'switch') { b = doc.languageId; }
-        else if (source === 'open') { b = editor.document.languageId; }
-        if (!['less'].includes(b)) { return; }
+    private async handleDocumentUpdate(doc: vscode.TextDocument) {
         let filePath = doc.uri.fsPath;
-        if (source === 'open') {
-            doc = editor.document;
-            filePath = editor.document.fileName;
-        }
         // 如果 L3 有，返回，顺便更新 L2 (当前激活缓存)
         if (globalCache.has(filePath)) {
             console.log("[调试][命中 L3] 从全局缓存恢复...");
@@ -322,6 +329,26 @@ class pluginInitializer {
             }
         }
     }
+    private async handleCacheOperation(successMsg: string, error?: string) {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) { return; }
+        try {
+            if (!this.verify(editor.document)) { return; }
+            const { enableNotification } = config;
+            const result = await this.handleDocumentUpdate(editor.document);
+            if (result === "L3" || result === "L4") {
+                enableNotification !== "disableNotifications" && (
+                    messageUtils.showInfo(successMsg),
+                    enableNotification !== "popupWithoutLog" &&
+                    messageUtils.logObejct("当前缓存内容", globalCache, enableNotification)
+                );
+            } else if (result === null) {
+                enableNotification !== "disableNotifications" && messageUtils.showInfo(error!);
+            }
+        } catch (error) {
+            messageUtils.showInfo(`${error}`);
+        }
+    };
 }
 class configManager {
     private static _getRawConfig<T>(section: string): T | undefined {
@@ -647,34 +674,31 @@ class processors {
      */
     mixinProbabilityScreening(
         line: number
-    ): boolean {
+    ) {
         // 1. 获取行文本
         const text = this.document.lineAt(line).text.trim();
-        if (!text) { return false; }
+        if (!text) { return { type: false }; }
         // 2. 找到第一个左括号
         const PhaseI = text.indexOf('(');
         // 没有括号肯定不是函数调用
-        if (PhaseI === -1) { return false; }
+        if (PhaseI === -1) { return { type: false }; }
         const PhaseII = text.substring(0, PhaseI);
         // [.#]       -> 必须以 . 或 # 开头 (Mixin的特征)
         // [a-zA-Z0-9_\-@\s]+ -> 中间允许包含字母、数字、下划线、连字符、变量符(@)以及【空格】
-        const match = PhaseII.match(/[.#][a-zA-Z0-9_\-\@\s]+$/);
+        // const match = PhaseII.match(/[.#][a-zA-Z0-9_\-\@\s]+$/);
+        const match = PhaseII.match(/[.#]([^()\s]+)/);
         // 如果没匹配到以 . 或 # 开头的片段，说明这可能只是个普通的 CSS 函数 (如 calc, rgba)
-        if (!match) { return false; }
+        if (!match) { return { type: false }; }
         // 3. 获取匹配到的原始字符串并去除首尾空格
         // 比如 "background: .my-mixin" -> 提取出 ".my-mixin"
         // 比如 "background: . my-mixin" -> 提取出 ". my-mixin" -> trim后变成 ".my-mixin" (或者保留空格视需求而定)
-        let PhaseIII = match[0].trim();
         // 4. 二次清洗（可选）：防止 ". my-mixin" 这种怪异情况
         // PhaseIII = PhaseIII.replace(/\s+/g, '');
-        // 5. 排除纯 CSS 函数黑名单 (虽然上面的正则已经排除了大部分，但这层保险更稳)
-        const cssFunctions = ['calc', 'var', 'rgb', 'rgba', 'hsl', 'url'];
-        // 去掉开头的 . 或 # 后检查是否是纯函数名
-        const PhaseIV = PhaseIII.replace(/^[.#]/, '');
-        if (cssFunctions.includes(PhaseIV)) { return false; }
+        const mixinName = match[1].trim();
+        if (cssFunctions.includes(mixinName)) { return { type: false }; }
         // 6. 通过初筛
-        console.log(`[调试] 可能是 Mixin: ${PhaseIII}`);
-        return true;
+        console.log(`[调试] 可能是 Mixin: ${mixinName}`);
+        return { type: true, name: mixinName };
     }
     /** 辅助函数：向上查找 Mixin 的定义,返回所在的行号
      * @param mixinName 需要查找的 Mixin 名字 (例如 ".border-radius")
@@ -682,12 +706,9 @@ class processors {
      * @return 提取所在的行号，如果没找到则返回 undefined
      */
     findMixinDefinition(mixinName: string, currentLineIndex: number): annotationBlock[] | undefined {
-        // 1. 构建正则：转义特殊字符，并匹配紧跟的左括号 (允许中间有空格)
-        // 比如名字是 .box，正则会匹配 .box( 或 .box (
-        const escapedName = mixinName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         // 允许中间有任意字符（比如注释、奇怪的符号），只要最后是 ( 就行
         // .*? 表示“非贪婪匹配”，会尽快找到第一个 (
-        const regex = new RegExp(`${escapedName}.*?\\(`);
+        const regex = new RegExp(`${mixinName}.*?\\(`);
         // 2. 从当前行的上一行开始，倒序遍历整个文档
         const util = new utils(this.document);
         for (let i = currentLineIndex; i >= 0; i--) {
@@ -825,21 +846,12 @@ class searchExecutor {
         this.document = document;
     }
     mapbeta(position: vscode.Position): vscode.Hover | undefined {
+        const wordRange = this.document.getWordRangeAtPosition(position);
+        if (!wordRange) { return undefined; }
         const processor = new processors(this.document);
-        const phase = processor.mixinProbabilityScreening(position.line);
-        if (!phase) { return undefined; }
-        const phaseI = this.document.lineAt(position.line).text;
-        // const match = phaseI.match(/\b([a-zA-Z0-9_-]+)\b/);
-        // const key = match?.[1];
-        // 使用新的正则
-        const match = phaseI.match(/[.#]([^()\s]+)/);
+        const match = this.a(position, processor);
         if (!match) { return undefined; }
-        // match[0] 是 ".className" (包含前缀)
-        // match[1] 是 "className" (纯名字)
-        // 既然你要构建完整的 Key，建议直接用 match[0]，或者手动拼接
-        const key = match[1];
-        if (!key) { return undefined; }
-        const finalText = this.L1(key, position, processor);
+        const finalText = this.L1(match, position, processor);
         return finalText;//Phase 3
     }
     /** 核心业务逻辑：非map的函数逻辑
@@ -849,16 +861,9 @@ class searchExecutor {
      */
     startupfunction(position: vscode.Position): vscode.Hover | undefined {
         try {
-            // 1. 获取当前鼠标所在的单词范围
-            const wordRange = this.document.getWordRangeAtPosition(position);
-            if (!wordRange) { return; }
             const processor = new processors(this.document);
-            // 2. 【关键一步】预判：检查单词后面是不是 "("
-            const nextChar = processor.mixinProbabilityScreening(position.line);
-            // 3. 判断：如果是 Mixin (后面有括号)，才继续执行
-            if (!nextChar) { return undefined; }
-            // 1. 获取这个单词的文本
-            const wordText = this.document.getText(wordRange);
+            const wordText = this.a(position, processor);
+            if (!wordText) { return undefined; }
             if (!cachedCache[wordText]) {
                 const rawCom = processor.findMixinDefinition(wordText, position.line);
                 rawCom ? activeCache[wordText] = rawCom : null;
@@ -885,6 +890,12 @@ class searchExecutor {
             };
             return processor.createHoverObjectbeta(APR);
         }
+    }
+    a(position: vscode.Position, processor: processors) {
+        // 2. 【关键一步】预判：检查单词后面是不是 "("
+        const phase = processor.mixinProbabilityScreening(position.line);
+        if (!phase.type) { return undefined; }
+        return phase.name;
     }
 }
 /** 核心调度器 

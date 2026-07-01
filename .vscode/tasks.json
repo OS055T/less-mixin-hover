@@ -94,6 +94,13 @@
                 "reveal": "silent" // 设为 silent 可以减少终端弹窗的干扰
             },
             "problemMatcher": []
+        },
+        {
+            "label": "User simulation",
+            "type": "npm",
+            "script": "User-environment-simulation",
+            "group": "build",
+            "problemMatcher": []
         }
     ]
 }
